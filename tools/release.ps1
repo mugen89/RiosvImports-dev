@@ -188,7 +188,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Пакетирането се провали.'
 if ($Upload) {
     Write-Host 'Качване в GitHub ...' -ForegroundColor Cyan
 
-    $upload = @(
+    # Не „$upload“: PowerShell не различава главни и малки букви, а $Upload е
+    # ключът на скрипта — списък в него не влиза и всичко спира.
+    $uploadArgs = @(
         'upload', 'github'
         '--repoUrl',     $repository
         '--token',       $Token
@@ -198,9 +200,9 @@ if ($Upload) {
         '--tag',         "v$Version"
     )
 
-    if ($prerelease) { $upload += '--pre' }
+    if ($prerelease) { $uploadArgs += '--pre' }
 
-    & vpk @upload
+    & vpk @uploadArgs
     if ($LASTEXITCODE -ne 0) { throw 'Качването се провали.' }
 }
 
