@@ -19,7 +19,7 @@ namespace RiosvImports.App.Updates;
 internal static class UpdateFeed
 {
     /// <summary>Публичното хранилище с изданията (засега — и с кода).</summary>
-    public const string Repository = "https://github.com/mugen89/RiosvImports";
+    public const string Repository = "https://github.com/mugen89/RIOSVImports-Dev";
 
     /// <summary>Клонът, от който се чете news.json.</summary>
     private const string Branch = "main";

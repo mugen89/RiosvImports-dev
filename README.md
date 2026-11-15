@@ -36,7 +36,7 @@ dotnet run --project tests\RiosvImports.Tests              # над 700 пров
 ## Издания и обновяване
 
 Докато програмата се разработва, всичко е тук, в това публично хранилище:
-изданията под [Releases](https://github.com/mugen89/RiosvImports/releases), а
+изданията под [Releases](https://github.com/mugen89/RIOSVImports-Dev/releases), а
 новините — в [news.json](news.json) в корена. Програмата пита GitHub без ключ.
 За истинското издаване кодът може да мине в частно хранилище, а изданията — в
 отделно публично (образецът е в `tools/releases-repo`).

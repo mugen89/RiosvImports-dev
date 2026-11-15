@@ -6,7 +6,7 @@
       "severity": "info",
       "title": "Програмата вече се обновява сама",
       "body": "Новите издания идват от GitHub. Когато има ново, то се показва тук, на началния екран, с бележките си — и се слага с едно копче, само когато кажете. Проверката се изключва от „Настройки → Обновяване“.",
-      "link": "https://github.com/mugen89/RiosvImports/releases"
+      "link": "https://github.com/mugen89/RIOSVImports-Dev/releases"
     }
   ]
 }
