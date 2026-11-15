@@ -1068,6 +1068,8 @@ internal sealed class TreatDialog : Dialog
 
         grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.Surface;
         grid.ColumnHeadersDefaultCellStyle.ForeColor = Theme.InkStrong;
+        grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.Surface;
+        grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Theme.InkStrong;
         grid.ColumnHeadersDefaultCellStyle.Font = Theme.Bold;
         grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 6, 6, 6);
         grid.DefaultCellStyle.BackColor = Theme.Canvas;
@@ -1121,26 +1123,41 @@ internal sealed class TreatDialog : Dialog
             return;
         }
 
+        // Наведнъж, а не ред по ред: зад един код в „Получен“ стоят стотици
+        // партиди, а таблицата се пълни наново при всяко щракване по код.
+        // Номерата на стълбовете се вземат веднъж: ред, още невързан за
+        // таблицата, не познава клетките си по име.
+        int At(string column) => _origin.Columns[column]!.Index;
+
+        var (batchAt, partnerAt, documentAt, stockAt) =
+            (At(OriginBatch), At(OriginPartner), At(OriginDocument), At(OriginStock));
+
+        var carried = Lang.T(" · заварено", " · carried in");
+        var built = new List<DataGridViewRow>();
+
         foreach (var share in Sorted(pile.Shares))
         {
-            var index = _origin.Rows.Add();
-            var row = _origin.Rows[index];
+            var row = (DataGridViewRow)_origin.RowTemplate.Clone();
 
-            row.Cells[OriginBatch].Value = "#" + share.Batch.Code;
-            row.Cells[OriginPartner].Value = Partner(share.Batch);
+            row.CreateCells(_origin);
+
+            row.Cells[batchAt].Value = "#" + share.Batch.Code;
+            row.Cells[partnerAt].Value = Partner(share.Batch);
 
             var document = share.Batch.Document.Length > 0
                 ? $"{share.Batch.ReceivedOn.ToString(ValueConverter.BulgarianDateFormat)} · {share.Batch.Document}"
                 : share.Batch.ReceivedOn.ToString(ValueConverter.BulgarianDateFormat);
 
-            row.Cells[OriginDocument].Value = share.Batch.Opening
-                ? document + Lang.T(" · заварено", " · carried in")
-                : document;
+            row.Cells[documentAt].Value = share.Batch.Opening ? document + carried : document;
 
-            row.Cells[OriginStock].Value = SplitMath.Amount(share.Amount);
+            row.Cells[stockAt].Value = SplitMath.Amount(share.Amount);
 
             row.Tag = share;
+
+            built.Add(row);
         }
+
+        _origin.Rows.AddRange([.. built]);
 
         // Взетото по партиди се чете от посоченото, а не се смята наново: точно
         // това пазеше избора на човека от FIFO.

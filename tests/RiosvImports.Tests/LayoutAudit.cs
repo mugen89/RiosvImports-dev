@@ -329,7 +329,12 @@ internal static class LayoutAudit
             return new SubmitDialog(service, db, companyId, "1", shares, seed.Date, seed.Direct, seed);
         }, width, height);
 
+        // От склада — с „Внеси…“; от „Месец“ — без него и с реда, който казва къде е.
         Dialog("MoveSheetDialog", () =>
+            new MoveSheetDialog(service, db, companyId, "1", MoveKind.Received, new LedgerPeriod(2026, 9),
+                SheetImport.Offered), width, height);
+
+        Dialog("MoveSheetDialog/Месец", () =>
             new MoveSheetDialog(service, db, companyId, "1", MoveKind.Received, new LedgerPeriod(2026, 9)), width, height);
 
         Dialog("MoveSheetDialog/Предаден", () =>
@@ -368,7 +373,41 @@ internal static class LayoutAudit
         Dialog("CompanyDialog", () => new CompanyDialog(db.Companies, 5), width, height, false);
         Dialog("PeriodsDialog", () => new PeriodsDialog(db, new CompanyScope(db)), width, height, false);
         Dialog("ImportsDialog", () => new ImportsDialog(db), width, height, false);
-        Dialog("BookDialog", () => new BookDialog(new LedgerPeriod(2026, 9), (_, _) => (12, 0, 0m)), width, height, false);
+        // Съставянето в трите си положения: готово, с грешки по схемата и спряно —
+        // най-дългите текстове, които прозорецът казва.
+        Dialog("BookDialog", () => new BookDialog(new LedgerPeriod(2026, 9),
+            (_, _) => new BookWeight(12, 0, [], [], 0)), width, height, false);
+
+        Dialog("BookDialog/грешки", () => new BookDialog(new LedgerPeriod(2026, 9),
+            (_, _) => new BookWeight(412, 37, [],
+            [
+                "Получен: липсва задължителна стойност за „ЕИК/ЕГН на лицето, от което е получен отпадъкът“ — 412 реда",
+                "Предаден: липсва задължителна стойност за „Наименование на лицето, на което е предаден“ — 8 реда",
+                "Третиран, ред 3: стойността „R12“ не е от допустимите за „Код на дейността“",
+                "…и още 2 вида"
+            ], 425)), width, height, false);
+
+        Dialog("BookDialog/спряно", () =>
+        {
+            var waiting = Reconcile.WaitingByMonth(db.Batches.List(companyId, "1"), db.Ledger.Read(companyId, "1"),
+                db.Ledger.Links(companyId, "1"), new LedgerPeriod(2026, 7), new LedgerPeriod(2026, 9));
+
+            return new BookDialog(new LedgerPeriod(2026, 9), (from, to) => new BookWeight(12, 0,
+                [.. waiting.Where(w => w.Month >= from && w.Month <= to)], [], 0));
+        }, width, height, false);
+
+        // Проверката на месеца — с истинските бележки на пробния септември.
+        Dialog("MonthCheckDialog", () =>
+        {
+            var september = new LedgerPeriod(2026, 9);
+            var issues = LedgerChecks.For(db, companyId, "1", september);
+            var quarter = Reconcile.WaitingByMonth(db.Batches.List(companyId, "1"), db.Ledger.Read(companyId, "1"),
+                db.Ledger.Links(companyId, "1"), new LedgerPeriod(2026, 7), september);
+
+            return new MonthCheckDialog("Проверка — септември 2026 — Метал Рециклиране и Търговия ЕООД",
+                MonthVerdict.For(september, 7, false, issues, quarter), issues,
+                quarter.FirstOrDefault(w => w.Month == september));
+        }, width, height, false);
         Dialog("ReceiversDialog", () => new ReceiversDialog(db, companyId), width, height, false);
         Dialog("ReceiversDialog/Договори", () => new ReceiversDialog(db, companyId, PartnerRole.Contract), width, height, false);
         Dialog("ValueListDialog", () => new ValueListDialog(service, db.Companies.List()), width, height, false);

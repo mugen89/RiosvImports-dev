@@ -464,6 +464,8 @@ internal sealed class MoveDialog : Dialog
 
         _draws.ColumnHeadersDefaultCellStyle.BackColor = Theme.Surface;
         _draws.ColumnHeadersDefaultCellStyle.ForeColor = Theme.InkStrong;
+        _draws.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.Surface;
+        _draws.ColumnHeadersDefaultCellStyle.SelectionForeColor = Theme.InkStrong;
         _draws.ColumnHeadersDefaultCellStyle.Font = Theme.Bold;
         _draws.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 6, 6, 6);
         _draws.DefaultCellStyle.BackColor = Theme.Canvas;

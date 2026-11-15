@@ -152,22 +152,32 @@ GitHub → Settings → Developer settings → Fine-grained tokens → Generate:
 
 ## 6. Издание
 
+Издание = раздел `## 1.3.1` в `CHANGELOG.md` + `<Version>1.3.1</Version>` в
+`Directory.Build.props` + коммит + етикет. Качва работният поток `release` в
+GitHub, щом етикетът стигне там:
+
+```powershell
+git tag -a v1.3.1 -m "RIOSV Imports 1.3.1"
+git push origin main v1.3.1
+```
+
+За около 15 минути `release` сглобява, пуска проверките, взема раздела от
+`CHANGELOG.md` за бележки, пакетира с Velopack и качва Release `v1.3.1` в
+`RiosvImports-dev` с `RiosvImports-win-Setup.exe`,
+`RiosvImports-win-Portable.zip` и пакета за обновяване — само разликата спрямо
+предишното издание. Ходът се гледа под „Actions“. Падне ли проверка, издание
+няма, а грешката стои като бележка към хода. След поправка — нов коммит и
+етикетът наново: `git tag -f -a v1.3.1 -m "RIOSV Imports 1.3.1"`, после
+`git push origin main` и `git push -f origin v1.3.1`.
+
+Същото от машината, без GitHub Actions:
+
 ```powershell
 dotnet tool install -g vpk --version 0.0.1298     # веднъж
-.\tools\release.ps1 -Version 1.3.0 -Upload
+.\tools\release.ps1 -Version 1.3.1 -Upload        # ключ с право върху RiosvImports-dev в $env:RELEASES_TOKEN
 ```
 
-или
-
-```powershell
-git tag v1.3.0
-git push origin v1.3.0                             # работният поток „release“ прави същото
-```
-
-Скриптът сглобява, взема раздела `## 1.3.0` от `CHANGELOG.md` за бележки,
-пакетира с Velopack и качва в `RiosvImports-releases` като Release `v1.3.0` с
-`RiosvImports-win-Setup.exe`, `RiosvImports-win-Portable.zip` и пакета за
-обновяване. Без `-Upload` пакетът остава в `artifacts\releases` — за проба.
+Без `-Upload` пакетът остава в `artifacts\releases` — за проба.
 
 Номерът на `vpk` следва пакета `Velopack` в `RiosvImports.App.csproj`;
 скриптът спира, ако се разминават.
@@ -177,7 +187,9 @@ git push origin v1.3.0                             # работният пото
 
 **Тестващите с 1.2.0** (самостоятелният exe от `dist`) инсталират веднъж от
 `RiosvImports-win-Setup.exe`. Оттам нататък програмата се обновява сама.
-Базата им в `%LOCALAPPDATA%\RIOSV Imports` е същата и остава.
+Базата им от `%LOCALAPPDATA%\RIOSV Imports` се пренася от 1.3.1 сама до
+програмата (`%LOCALAPPDATA%\RiosvImports\Data`); старото копие остава в
+профила преименувано (`workspace.db.moved`) с бележка `ПРЕМЕСТЕНА.txt`.
 
 ---
 
@@ -220,9 +232,9 @@ Velopack по подразбиране слага всяко свалено из
 - [x] Обновяване от GitHub; новини от `news.json`
 - [x] Работни потоци: `build` и `release`
 - [x] `CHANGELOG.md` с първото издание през GitHub — 1.3.0
-- [ ] Коммит и частно хранилище
-- [ ] Публично хранилище с изданията
-- [ ] `RELEASES_TOKEN` — на машината и като тайна
-- [ ] Издание 1.3.0
+- [x] Коммит и едно публично хранилище — `RiosvImports-dev`
+- [x] Издание 1.3.0
+- [ ] Частно хранилище за кода и отделно за изданията — при истинското издаване
+- [ ] `RELEASES_TOKEN` — на машината и като тайна (трябва чак при две хранилища)
 - [ ] Клон `main` защитен
 - [ ] Мъртвият интерфейс и `README.txt` — махнати и от работната папка

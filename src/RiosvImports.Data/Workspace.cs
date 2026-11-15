@@ -623,10 +623,47 @@ public sealed class Workspace : IDisposable
         return workspace;
     }
 
+    /// <summary>
+    /// Старото място на базата — в профила на потребителя.
+    ///
+    /// От 1.3.1 програмата пази работата до себе си (виж DataLocation в
+    /// програмата) и оттук само я пренася при първото пускане. Остава като
+    /// подразбиране за онези, които не знаят къде е програмата — инструментът за
+    /// пробни данни, — и като мястото, където работата чака след деинсталиране.
+    /// </summary>
     public static string DefaultPath() => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "RIOSV Imports",
         "workspace.db");
+
+    /// <summary>
+    /// Копира база от един файл в друг през SQLite — с всичко, което още стои в WAL.
+    ///
+    /// Без пул на връзките: върната в пула, връзката държи файла отворен, а
+    /// след копието старият файл се преименува — и Windows не дава да се
+    /// преименува отворен файл.
+    /// </summary>
+    public static void Copy(string from, string to)
+    {
+        using var source = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = from,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ToString());
+
+        using var target = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = to,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false
+        }.ToString());
+
+        source.Open();
+        target.Open();
+
+        source.BackupDatabase(target);
+    }
 
     /// <summary>
     /// Прилага само липсващите стъпки. Всички са в една транзакция: наполовина
@@ -681,6 +718,59 @@ public sealed class Workspace : IDisposable
     }
 
     /// <summary>
+    /// Колко има в склада и във внесеното — за всички фирми.
+    ///
+    /// Прозорецът за изчистване казва числата, преди да изтрие: „ще се изтрият
+    /// 1 150 движения“ е решение, „ще се изтрие складът“ — не.
+    /// </summary>
+    public StockCounts CountStock() => new(
+        Count("SELECT COUNT(*) FROM ledger_moves WHERE opening = 0;"),
+        Count("SELECT COUNT(*) FROM ledger_moves WHERE opening = 1;"),
+        Count("SELECT COUNT(*) FROM batches;"),
+        Count("SELECT COUNT(*) FROM imports;"),
+        Count("SELECT COUNT(*) FROM action_log;"),
+        Count("SELECT COUNT(*) FROM ledger_periods;"),
+        Count($"SELECT COUNT(*) FROM settings WHERE key LIKE '{SettingsStore.Keys.LedgerStart}.%';"));
+
+    /// <summary>
+    /// Изчиства склада и всичко внесено — за всички фирми, наведнъж.
+    ///
+    /// За проба: тестващият внася един и същ дневник отново и отново и всеки път
+    /// трябва да започне от празен склад. Махат се движенията с дяловете им,
+    /// партидите, началните количества и началото на воденето, затворените
+    /// месеци, дневникът на въведеното и следата на внесените файлове.
+    ///
+    /// Остават фирмите, отчетите, кратките списъци, получателите, доставчиците,
+    /// договорите и настройките: те не са склад, а без тях всяка проба почва с
+    /// попълване на фирма. Отчет, внесен от файл, остава като обикновен отчет —
+    /// маха се само следата, че е внесен.
+    ///
+    /// Всичко или нищо: наполовина изчистен склад е по-лош от неизчистен.
+    /// </summary>
+    public StockCounts ClearStock()
+    {
+        var counts = CountStock();
+
+        Atomically(() =>
+        {
+            // Редът е по зависимост: който сочи, пада преди този, към когото сочи.
+            Execute(_connection, "DELETE FROM import_items;");
+            Execute(_connection, "DELETE FROM imports;");
+            Execute(_connection, "DELETE FROM action_windows;");
+            Execute(_connection, "DELETE FROM action_log;");
+            Execute(_connection, "DELETE FROM ledger_links;");
+            Execute(_connection, "DELETE FROM ledger_moves;");
+            Execute(_connection, "DELETE FROM batches;");
+            Execute(_connection, "DELETE FROM ledger_periods;");
+            Execute(_connection, $"DELETE FROM settings WHERE key LIKE '{SettingsStore.Keys.LedgerStart}.%';");
+        });
+
+        return counts;
+    }
+
+    private int Count(string sql) => Convert.ToInt32(Scalar(sql));
+
+    /// <summary>
     /// Прави копие на базата.
     ///
     /// През SQLite, а не с копиране на файла: при WAL част от последните записи
@@ -714,4 +804,18 @@ public sealed class Workspace : IDisposable
     }
 
     public void Dispose() => _connection.Dispose();
+}
+
+/// <summary>
+/// Колко има в склада и във внесеното — за всички фирми.
+///
+/// <paramref name="Openings"/> са началните количества (заварената наличност),
+/// <paramref name="Starts"/> — за колко фирми е обявен месецът, от който се води
+/// складът. <paramref name="Logged"/> са редовете в дневника на въведеното.
+/// </summary>
+public sealed record StockCounts(
+    int Moves, int Openings, int Batches, int Imports, int Logged, int Closed, int Starts)
+{
+    /// <summary>Няма какво да се изчиства.</summary>
+    public bool IsEmpty => Moves + Openings + Batches + Imports + Logged + Closed + Starts == 0;
 }

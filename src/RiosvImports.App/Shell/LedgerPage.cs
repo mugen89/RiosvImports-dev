@@ -1,5 +1,6 @@
 ﻿using RiosvImports.App.Controls;
 using RiosvImports.Core;
+using RiosvImports.Core.Import;
 using RiosvImports.Core.Ledger;
 using RiosvImports.Core.Localization;
 using RiosvImports.Core.Schema;
@@ -53,10 +54,38 @@ internal sealed class LedgerPage : ContentPage
     private readonly SegmentedControl _kind = new();
     private readonly DataGridView _grid = new();
     private readonly Label _summary = new();
+
+    /// <summary>
+    /// Присъдата за месеца — един ред, който казва може ли отчет и защо не.
+    ///
+    /// Дотук тук стоеше първата бележка от списъка, отрязана на един ред: „3
+    /// спиращи · Код 170405: на 12.07…“. Не казваше дали спира отчетът или само
+    /// затварянето, нито какво да се направи — а точно това питаха.
+    /// </summary>
     private readonly Label _checks = new();
+
+    /// <summary>Под присъдата: какво да се направи, с мястото, където се прави.</summary>
+    private readonly Label _fix = new();
+
+    /// <summary>Търсене в месеца — по код, клиент, получател, документ, договор и бележка.</summary>
+    private readonly SearchBox _search = new(Lang.T(
+        "Търсене по код, клиент, документ или бележка  (Ctrl+F)",
+        "Search by code, client, document or note  (Ctrl+F)"));
 
     /// <summary>Копчето „Състави отчет…“ — мери се от теста.</summary>
     private AppButton? _compose;
+
+    /// <summary>„Проверка…“ — целият списък с бележките и какво да се направи.</summary>
+    private AppButton? _review;
+
+    /// <summary>Последно намереното за месеца — „Проверка…“ го показва, без да смята наново.</summary>
+    private IReadOnlyList<LedgerIssue> _issues = [];
+
+    /// <summary>Какво чака в „Третиран“ в края на месеца — причината, поради която отчет не излиза.</summary>
+    private WaitingMonth? _waiting;
+
+    /// <summary>Последната присъда — „Проверка…“ показва нея, а не смята наново.</summary>
+    private MonthVerdict? _verdict;
 
     /// <summary>Колко реда се виждат сега и колко тона носят — следват ситото.</summary>
     private int _shown;
@@ -183,6 +212,13 @@ internal sealed class LedgerPage : ContentPage
         _kind.Height = Theme.Scaled(40);
         _kind.SelectedIndexChanged += (_, _) => Rebuild();
 
+        // Търсенето стои до ситото: двете отговарят на „кое от месеца гледам“.
+        // Истински месец е петстотин приемания — ред се намира по дума, не с
+        // колелцето.
+        _search.Dock = DockStyle.Right;
+        _search.Width = Theme.Scaled(330);
+        _search.TextChanged += (_, _) => Rebuild();
+
         var tools = new FlowLayoutPanel
         {
             Dock = DockStyle.Right,
@@ -222,6 +258,7 @@ internal sealed class LedgerPage : ContentPage
             Padding = new Padding(0, Theme.GapSmall, 0, 0)
         };
 
+        filters.Controls.Add(_search);
         filters.Controls.Add(_kind);
 
         // Пълнещият влиза пръв: закачените се редят наопаки и последният
@@ -287,10 +324,16 @@ internal sealed class LedgerPage : ContentPage
 
     private Control BuildSummary()
     {
+        // Два реда отляво — присъдата и какво да се направи — и двете копчета
+        // отдясно. Височината е от шрифтовете, не кръгло число: при 150 % вторият
+        // ред иначе излизаше под копчетата и се режеше.
+        var text = Theme.Bold.Height + 2 * Theme.Small.Height + Theme.Scaled(10);
+        var buttons = Theme.Scaled(40);
+
         var host = new Panel
         {
             Dock = DockStyle.Top,
-            Height = Theme.Scaled(52),
+            Height = Math.Max(text, buttons) + Theme.Gap,
             BackColor = Theme.Canvas,
             Padding = new Padding(0, 0, 0, Theme.Gap)
         };
@@ -302,21 +345,64 @@ internal sealed class LedgerPage : ContentPage
         // стоеше до онова, което се пипа по двайсет пъти на ден. Живее в
         // „Настройки → Затворени месеци“.
         var compose = Theme.GhostButton(Lang.T("Състави отчет…", "Compose report…"), Theme.Glyph.Documents);
-        compose.Height = Theme.Scaled(40);
-        compose.Dock = DockStyle.Right;
+        compose.Height = buttons;
+        compose.Margin = new Padding(Theme.GapSmall, 0, 0, 0);
         compose.Click += (_, _) => Compose();
         _compose = compose;
 
-        _checks.Dock = DockStyle.Top;
-        _checks.Height = Theme.Scaled(24);
-        _checks.Font = Theme.SmallBold;
-        _checks.ForeColor = Theme.Warn;
+        // Проверката стои до съставянето, защото отговаря на въпроса преди него:
+        // „ще излезе ли отчет — и ако не, какво да пипна“.
+        var review = Theme.GhostButton(Lang.T("Проверка…", "Check…"), Theme.Glyph.Search);
+        review.Height = buttons;
+        review.Margin = new Padding(Theme.GapSmall, 0, 0, 0);
+        review.Click += (_, _) => Review();
+        _review = review;
 
-        // Закачените се редят наопаки: последният добавен се разполага пръв и
-        // взима цялата височина. Затова копчето влиза НАКРАЯ — иначе надписът
-        // отгоре му оставя дванайсет пиксела и то се показва нарязано.
-        host.Controls.Add(_checks);
-        host.Controls.Add(compose.FitWidth());
+        new ToolTip().SetToolTip(review, Lang.T(
+            "Всичко, което проверката намира в месеца, и какво да се направи за всяко.",
+            "Everything the check finds in the month, and what to do about each."));
+
+        var tools = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Right,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            BackColor = Theme.Canvas,
+            Padding = new Padding(Theme.GapLarge, 0, 0, 0)
+        };
+
+        tools.Controls.Add(compose.FitWidth());
+        tools.Controls.Add(review.FitWidth());
+
+        _checks.Dock = DockStyle.Top;
+        _checks.Height = Theme.Bold.Height + Theme.Scaled(4);
+        _checks.Font = Theme.Bold;
+        _checks.ForeColor = Theme.Warn;
+        _checks.AutoEllipsis = true;
+        _checks.Cursor = Cursors.Hand;
+        _checks.Click += (_, _) => Review();
+
+        // Два реда: поправката е изречение с мястото, където се прави, и на
+        // един ред се реже точно в края — там, където е „Образувай…“.
+        _fix.Dock = DockStyle.Top;
+        _fix.Height = 2 * Theme.Small.Height + Theme.Scaled(4);
+        _fix.Font = Theme.Small;
+        _fix.ForeColor = Theme.InkMuted;
+        _fix.AutoEllipsis = true;
+
+        var words = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Canvas };
+
+        // Закачените отгоре се редят наопаки: присъдата влиза последна, за да
+        // стои най-горе.
+        words.Controls.Add(_fix);
+        words.Controls.Add(_checks);
+
+        // Пълнещият влиза пръв: закачените се редят наопаки и копчетата получават
+        // своя край, а остатъкът остава за думите.
+        host.Controls.Add(words);
+        host.Controls.Add(tools);
 
         return host;
     }
@@ -351,6 +437,8 @@ internal sealed class LedgerPage : ContentPage
 
         _grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.Surface;
         _grid.ColumnHeadersDefaultCellStyle.ForeColor = Theme.InkStrong;
+        _grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.Surface;
+        _grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Theme.InkStrong;
         _grid.ColumnHeadersDefaultCellStyle.Font = Theme.Bold;
         _grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 6, 6, 6);
 
@@ -630,35 +718,59 @@ internal sealed class LedgerPage : ContentPage
     {
         if (_filling || IsDisposed) return;
 
-        _grid.Rows.Clear();
         RollButtons();
 
         _pageTitle.Text = _scope.Titled(Lang.T("Месец", "Month"));
 
         if (Company() is not { } companyId || Period() is not { } period)
         {
+            _grid.Rows.Clear();
             _summary.Text = Lang.T("Заведете фирма в „Настройки“, за да започнете.",
                                    "Add a company in Settings to begin.");
             _checks.Text = string.Empty;
+            _fix.Text = string.Empty;
+            _issues = [];
+            _waiting = null;
+            _verdict = null;
             return;
         }
 
         var stage = Stage();
         var moves = _workspace.Ledger.Read(companyId, stage);
         var links = _workspace.Ledger.Links(companyId, stage);
-        var batches = _workspace.Batches.List(companyId, stage).ToDictionary(b => b.Id);
+        var batchList = _workspace.Batches.List(companyId, stage);
+        var batches = batchList.ToDictionary(b => b.Id);
 
-        // Получателите с ЕДНО питане, а не по едно на ред: месец с триста
-        // движения иначе би питал базата триста пъти за колона от схемата.
+        // Получателите и бележките с ЕДНО питане, а не по едно на ред: месец с
+        // петстотин движения иначе би питал базата петстотин пъти за колона,
+        // която не участва в нито една сметка.
         var parties = _workspace.Ledger.Parties(companyId, stage);
+        var notes = _workspace.Ledger.Notes(companyId, stage);
 
         var byMove = links.GroupBy(l => l.MoveId)
             .ToDictionary(g => g.Key, g => Allocation.Origins([.. g.Select(l => new Draw(l.BatchId, l.Amount))], batches));
 
         var wanted = _kind.SelectedIndex > 0 ? Moves.Every[_kind.SelectedIndex - 1] : (MoveKind?)null;
+        var words = SearchWords();
+
+        // Редът, на който е стоял човекът, остава избран и след пресмятането:
+        // иначе всяка поправка го връщаше в началото на петстотин реда.
+        var kept = Selected();
 
         _shown = 0;
         _shownAmount = 0m;
+
+        // Номерата на стълбовете се вземат веднъж: ред, още невързан за таблицата,
+        // не познава клетките си по име.
+        int At(string column) => _grid.Columns[column]!.Index;
+
+        var (date, kind, code, amount, origin, receiver, contract, note) =
+            (At(DateColumn), At(KindColumn), At(CodeColumn), At(AmountColumn),
+             At(OriginColumn), At(ReceiverColumn), At(ContractColumn), At(NoteColumn));
+
+        var notStated = Lang.T("(не е посочен)", "(not stated)");
+        var rows = new List<DataGridViewRow>();
+        var current = -1;
 
         foreach (var move in moves
                      .Where(m => period.Covers(m.Date) && !m.Opening)
@@ -666,36 +778,70 @@ internal sealed class LedgerPage : ContentPage
                      .OrderBy(m => m.Date)
                      .ThenBy(m => m.Id))
         {
-            var index = _grid.Rows.Add();
-            var row = _grid.Rows[index];
+            var dateText = move.Date.ToString(ValueConverter.BulgarianDateFormat);
+            var kindText = Moves.Title(move.Kind);
 
-            row.Cells[DateColumn].Value = move.Date.ToString(ValueConverter.BulgarianDateFormat);
-            row.Cells[KindColumn].Value = Moves.Title(move.Kind);
             // При третиране с обявен изходен код се виждат и двата: по левия
             // се вади складът, десният отива в книгата. Скрит, вторият би менял
             // отчета, без да се вижда никъде.
-            row.Cells[CodeColumn].Value = move.EwcOut.Length > 0
+            var codeText = move.EwcOut.Length > 0
                 ? $"{Describe(move.Ewc)} → {Describe(move.EwcOut)}"
                 : Describe(move.Ewc);
-            row.Cells[AmountColumn].Value = SplitMath.Amount(move.Amount);
-            row.Cells[OriginColumn].Value = Origin(byMove.GetValueOrDefault(move.Id));
+
+            var shares = byMove.GetValueOrDefault(move.Id);
+            var originText = Origin(shares);
+
+            var receiverText = string.Empty;
+            var contractText = string.Empty;
 
             if (move.Kind == MoveKind.Submitted)
             {
                 var party = parties.GetValueOrDefault(move.Id, HandParty.None);
 
-                row.Cells[ReceiverColumn].Value = party.Known
-                    ? party.Display
-                    : Lang.T("(не е посочен)", "(not stated)");
-
-                row.Cells[ContractColumn].Value = party.Contract;
+                receiverText = party.Known ? party.Display : notStated;
+                contractText = party.Contract;
             }
 
-            row.Cells[NoteColumn].Value = _workspace.Ledger.Note(move.Id);
+            var noteText = notes.GetValueOrDefault(move.Id, string.Empty);
+
+            // Търси се в това, което се вижда, плюс документа и ЕИК-а зад
+            // партидите: човек помни „протокол 1330“ или „Метал“, а не реда.
+            if (words.Length > 0 && !words.All(w =>
+                    Has(dateText, w) || Has(kindText, w) || Has(codeText, w) || Has(originText, w) ||
+                    Has(receiverText, w) || Has(contractText, w) || Has(noteText, w) ||
+                    Behind(shares, batches, w)))
+                continue;
+
+            var row = (DataGridViewRow)_grid.RowTemplate.Clone();
+            row.CreateCells(_grid);
+
+            row.Cells[date].Value = dateText;
+            row.Cells[kind].Value = kindText;
+            row.Cells[code].Value = codeText;
+            row.Cells[amount].Value = SplitMath.Amount(move.Amount);
+            row.Cells[origin].Value = originText;
+            row.Cells[receiver].Value = receiverText;
+            row.Cells[contract].Value = contractText;
+            row.Cells[note].Value = noteText;
             row.Tag = move.Id;
+
+            if (move.Id == kept) current = rows.Count;
+
+            rows.Add(row);
 
             _shown++;
             _shownAmount += move.Amount;
+        }
+
+        // Наведнъж, а не ред по ред: петстотин приемания на юли, добавени едно
+        // по едно, бяха половин секунда на всяко щракване по ситото.
+        _grid.Rows.Clear();
+        _grid.Rows.AddRange([.. rows]);
+
+        if (current >= 0)
+        {
+            _grid.CurrentCell = _grid.Rows[current].Cells[date];
+            Reveal(current);
         }
 
         // Сборът на видимото стои в заглавието на колоната — там, където се
@@ -703,7 +849,55 @@ internal sealed class LedgerPage : ContentPage
         _grid.Columns[AmountColumn].HeaderText =
             Summed(Lang.T("Количество, т", "Quantity, t"), _shownAmount);
 
-        Describe(companyId, stage, period, moves, links);
+        Describe(companyId, stage, period, moves, links, batchList);
+    }
+
+    /// <summary>
+    /// Превърта до реда, ако е под ръба — иначе избирането му не се вижда, което
+    /// е по-лошо от неизбиране.
+    ///
+    /// Таблица без място за редове (смален прозорец, страница, която още не е
+    /// подредена) хвърля при превъртане. Тогава няма какво да се види и не се
+    /// превърта: изборът си остава и се вижда при следващото показване.
+    /// </summary>
+    private void Reveal(int index)
+    {
+        if (index < 0 || index >= _grid.Rows.Count || _grid.Rows[index].Displayed) return;
+        if (_grid.DisplayRectangle.Height <= _grid.ColumnHeadersHeight) return;
+
+        try
+        {
+            _grid.FirstDisplayedScrollingRowIndex = Math.Max(0, index - 3);
+        }
+        catch (InvalidOperationException)
+        {
+            // „No room is available to display rows“ — виж горе.
+        }
+    }
+
+    /// <summary>Думите от търсенето — всяка трябва да се намери някъде в реда.</summary>
+    private string[] SearchWords() =>
+        _search.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static bool Has(string haystack, string needle) =>
+        haystack.Contains(needle, StringComparison.CurrentCultureIgnoreCase);
+
+    /// <summary>Документът и ЕИК-ът на партидите зад реда — не се виждат, но се търсят.</summary>
+    private static bool Behind(
+        IReadOnlyList<OriginShare>? shares, IReadOnlyDictionary<long, Batch> batches, string word)
+    {
+        if (shares is not { Count: > 0 }) return false;
+
+        foreach (var share in shares)
+        {
+            if (batches.GetValueOrDefault(share.BatchId) is not { } batch) continue;
+
+            if (Has(batch.Document, word) || Has(batch.Eik, word) || Has(batch.PartnerName, word) ||
+                Has("#" + batch.Code, word))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -731,7 +925,7 @@ internal sealed class LedgerPage : ContentPage
     /// <summary>Какво казва месецът: сборовете, наличностите и какво не е наред.</summary>
     private void Describe(
         long companyId, string stage, LedgerPeriod period,
-        IReadOnlyList<Move> moves, IReadOnlyList<LedgerLink> links)
+        IReadOnlyList<Move> moves, IReadOnlyList<LedgerLink> links, IReadOnlyList<Batch> batches)
     {
         var totals = StockMath.Totals(moves, period);
 
@@ -739,12 +933,19 @@ internal sealed class LedgerPage : ContentPage
         var closingReceived = StockMath.Closing(moves, StoreKind.Received, period).Values.Sum();
         var closingFormed = StockMath.Closing(moves, StoreKind.Formed, period).Values.Sum();
 
-        var waiting = StockMath.Waiting(
-            _workspace.Batches.List(companyId, stage), moves, links, period.Last).Total;
+        // Тримесечието, не само месецът: съставянето предлага него и готов месец
+        // в неготово тримесечие е точно случаят, в който „защо не излиза“ иначе
+        // няма отговор на екрана.
+        var (first, last) = Quarter(period);
+        var quarter = Reconcile.WaitingByMonth(batches, moves, links, first, last);
+
+        _waiting = quarter.FirstOrDefault(w => w.Month == period);
+
+        var waiting = _waiting?.Amount ?? 0m;
 
         // Показаното е първо: то отговаря на въпроса „какво гледам сега“, а
         // сборовете на месеца стоят зад него непроменени.
-        var shown = _kind.SelectedIndex > 0
+        var shown = _kind.SelectedIndex > 0 || SearchWords().Length > 0
             ? Lang.T($"Показани {_shown} реда · {SplitMath.Amount(_shownAmount)} т · ",
                      $"{_shown} rows shown · {SplitMath.Amount(_shownAmount)} t · ")
             : string.Empty;
@@ -776,29 +977,37 @@ internal sealed class LedgerPage : ContentPage
             $"“Treated” at close: {SplitMath.Amount(waiting)} t · " +
             $"“Formed” at close: {SplitMath.Amount(closingFormed)} t");
 
-        var issues = Reconcile.Check(
-            _workspace.Batches.List(companyId, stage), moves, links, period,
-            _workspace.Setup.Start(companyId));
+        _issues = Reconcile.Check(batches, moves, links, period, _workspace.Setup.Start(companyId));
 
         var closed = _workspace.Periods.IsClosed(companyId, stage, period);
+        var count = moves.Count(m => period.Covers(m.Date) && !m.Opening);
 
-        if (issues.Count == 0)
+        var verdict = _verdict = MonthVerdict.For(period, count, closed, _issues, quarter);
+
+        _checks.Text = verdict.Text;
+        _checks.ForeColor = verdict.Colour;
+        _fix.Text = verdict.Fix;
+
+        // Броят стои на копчето: „Проверка (3)“ се вижда и когато присъдата е за
+        // друго — и казва, че има какво да се отвори.
+        var listed = _issues.Count;
+
+        if (_review is not null)
         {
-            _checks.Text = closed
-                ? Lang.T("Месецът е затворен.", "The month is closed.")
-                : Lang.T("Няма намерени несъответствия.", "No discrepancies found.");
-            _checks.ForeColor = Theme.Ok;
-            return;
+            _review.Text = listed > 0
+                ? Lang.T($"Проверка ({listed})…", $"Check ({listed})…")
+                : Lang.T("Проверка…", "Check…");
+
+            _review.FitWidth();
         }
+    }
 
-        var blocking = issues.Count(i => i.Blocks);
+    /// <summary>Тримесечието, в което пада месецът — както го предлага съставянето.</summary>
+    private static (LedgerPeriod From, LedgerPeriod To) Quarter(LedgerPeriod period)
+    {
+        var first = (period.Quarter - 1) * 3 + 1;
 
-        _checks.Text = blocking > 0
-            ? Lang.T($"{blocking} спиращи · {issues[0].Text}", $"{blocking} blocking · {issues[0].Text}")
-            : Lang.T($"{issues.Count} бележки · {issues[0].Text}",
-                     $"{issues.Count} notes · {issues[0].Text}");
-
-        _checks.ForeColor = blocking > 0 ? Theme.Error : Theme.Warn;
+        return (new LedgerPeriod(period.Year, first), new LedgerPeriod(period.Year, first + 2));
     }
 
     // ------------------------------------------------------------- действия
@@ -819,7 +1028,10 @@ internal sealed class LedgerPage : ContentPage
 
         if (Locked(companyId, stage, period)) return;
 
-        using var dialog = new MoveSheetDialog(_service, _workspace, companyId, stage, kind, period);
+        // Без внасяне от файл: то е само в „Склад“ → „Внеси…“. Два пътя до едно
+        // и също внасяне бяха два начина да се внесе един файл два пъти — и
+        // тестващите питаха кой е правилният. Тук се пише и се залепва.
+        using var dialog = new MoveSheetDialog(_service, _workspace, companyId, stage, kind, period, SheetImport.None);
 
         dialog.ShowDialog(this);
 
@@ -907,8 +1119,23 @@ internal sealed class LedgerPage : ContentPage
         if (Company() is not { } companyId) return;
 
         var stage = Stage();
-        var move = _workspace.Ledger.Read(companyId, stage).FirstOrDefault(m => m.Id == moveId);
+        var moves = _workspace.Ledger.Read(companyId, stage);
+        var move = moves.FirstOrDefault(m => m.Id == moveId);
         if (move is null) return;
+
+        // Затвореният месец не се пипа — и при махане, не само при поправка.
+        // Дотук махането минаваше и през затворен месец.
+        if (Locked(companyId, stage, LedgerPeriod.Of(move.Date))) return;
+
+        // Същата проверка като в дневника (дефект 9): движение, от което вече е
+        // черпено, не се маха — иначе едни и същи тонове остават в два склада.
+        if (Refused(moves, _workspace.Ledger.Links(companyId, stage), moveId) is { } why)
+        {
+            MessageBox.Show(this, why, Lang.T("От него вече е взето", "It has already been drawn on"),
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+            return;
+        }
 
         var day = move.Date.ToString(ValueConverter.BulgarianDateFormat);
 
@@ -916,39 +1143,53 @@ internal sealed class LedgerPage : ContentPage
             $"Да се махне ли {Moves.Title(move.Kind).ToLowerInvariant()} на {day} за {SplitMath.Amount(move.Amount)} т?",
             $"Remove the {Moves.Title(move.Kind).ToLowerInvariant()} of {SplitMath.Amount(move.Amount)} t on {day}?");
 
-        // Партидите на това приемане и дали от тях вече е черпено. Ако е,
-        // махането оставя третирането без покритие — казва се предварително,
-        // защото после се вижда само като недостиг с неясна причина.
-        var mine = move.Kind == MoveKind.Received
-            ? _workspace.Ledger.Draws(moveId).Select(d => d.BatchId).ToList()
-            : [];
-
-        var used = mine.Count > 0 &&
-                   _workspace.Ledger.Links(companyId)
-                       .Any(l => l.MoveId != moveId && mine.Contains(l.BatchId));
-
-        if (used)
-            question += Environment.NewLine + Environment.NewLine + Lang.T(
-                "От тази партида вече е черпено. Третирането ще остане без покритие " +
-                "и месецът няма да може да се затвори, докато не се поправи.",
-                "This batch has already been drawn from. The treatment will be left uncovered " +
-                "and the month will not close until that is fixed.");
-
+        // Питането остава винаги: това е движение от склада, не ред в таблица, и
+        // отметката „Питай преди изтриване на ред“ не е за него. „Не“ е отговорът
+        // по подразбиране — Enter не бива да маха.
         var answer = MessageBox.Show(this, question,
             Lang.T("Махане на движение", "Remove a movement"),
-            MessageBoxButtons.YesNo, used ? MessageBoxIcon.Warning : MessageBoxIcon.Question);
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
 
         if (answer != DialogResult.Yes) return;
 
-        _workspace.Ledger.Remove(moveId);
-
         // Партида, към която вече нищо не сочи, си отива с приемането: тя е
-        // самото приемане, а не отделно заведено нещо.
-        foreach (var batchId in mine)
-            if (_workspace.Ledger.Links(companyId).All(l => l.BatchId != batchId))
-                _workspace.Batches.Remove(batchId);
+        // самото приемане, а не отделно заведено нещо. Правилото живее при
+        // записа (LedgerWriter), за да е едно за трите места, откъдето се маха.
+        _workspace.Writer.Remove(companyId, moveId);
 
         Refresh();
+    }
+
+    /// <summary>
+    /// Защо това не може да се махне — или null, ако може.
+    ///
+    /// Същото правило като в дневника (<see cref="Undo.Takers"/>): кой е черпил
+    /// от махнатото. Изброяват се истинските движения, за да могат да се намерят —
+    /// и се казва редът: от последното към първото.
+    /// </summary>
+    internal static string? Refused(
+        IReadOnlyList<Move> moves, IReadOnlyList<LedgerLink> links, params long[] gone)
+    {
+        var takers = Undo.Takers(moves, links, gone.ToHashSet());
+
+        if (takers.Count == 0) return null;
+
+        const int most = 8;
+
+        var lines = takers.Take(most).Select(m => "•  " + Amend.Describe(m)).ToList();
+
+        if (takers.Count > most)
+            lines.Add(Lang.T($"…и още {takers.Count - most}", $"…and {takers.Count - most} more"));
+
+        var list = string.Join(Environment.NewLine, lines);
+
+        return Lang.T(
+            $"Това не може да се махне — от него вече е взето:{Environment.NewLine}{Environment.NewLine}{list}" +
+            $"{Environment.NewLine}{Environment.NewLine}Махнете първо тях, от последното към първото. " +
+            "Иначе едни и същи тонове биха останали в два склада.",
+            $"This cannot be removed — it has already been drawn on:{Environment.NewLine}{Environment.NewLine}{list}" +
+            $"{Environment.NewLine}{Environment.NewLine}Remove those first, from the last to the first. " +
+            "Otherwise the same tonnes would stay in two stores.");
     }
 
     /// <summary>Контролите за този месец — правилото стои в <see cref="LedgerChecks"/>.</summary>
@@ -981,7 +1222,7 @@ internal sealed class LedgerPage : ContentPage
 
         var stage = Stage();
 
-        using var dialog = new BookDialog(period, (from, to) => Weigh(companyId, stage, from, to));
+        using var dialog = new BookDialog(period, (from, to) => Weigh(company.Eik, companyId, stage, from, to));
 
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
@@ -995,39 +1236,51 @@ internal sealed class LedgerPage : ContentPage
                        "No report can be composed while a quantity waits in the “Treated” store:") +
                 Environment.NewLine + Environment.NewLine +
                 string.Join(Environment.NewLine, waiting.Select(w =>
-                    Lang.T($"· {w.Month.Title()} — {SplitMath.Amount(w.Amount)} т",
-                           $"· {w.Month.Title()} — {SplitMath.Amount(w.Amount)} t"))) +
+                    Lang.T($"· {w.Month.Title()} — {SplitMath.Amount(w.Amount)} т: {w.Named(2)}",
+                           $"· {w.Month.Title()} — {SplitMath.Amount(w.Amount)} t: {w.Named(2)}"))) +
                 Environment.NewLine + Environment.NewLine +
-                Lang.T("Обявете какво е образувано или рециклирано от тях — в „Месец“ или от склад „Третиран“.",
-                       "State what was generated or recycled from them — in “Month” or from the “Treated” store."),
+                new LedgerIssue(LedgerProblem.Waiting, string.Empty, 0m).Fix,
                 Lang.T("Складът не е празен", "The store is not empty"),
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
             return;
         }
 
-        var rows = Collect(companyId, stage, dialog.From, dialog.To);
-        var schema = _service.GetSchema("book");
-        var header = BookProjection.Header(company.Eik, dialog.From, dialog.To);
+        UseWaitCursor = true;
+        Cursor.Current = Cursors.WaitCursor;
 
-        var documentId = _workspace.Documents.Create(
-            "book",
-            BookNodes.Report,
-            dialog.SuggestedTitle(company.Name),
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["year"] = header.Year.ToString(),
-                ["quarter"] = header.Quarter.ToString(),
-                ["eik"] = header.Eik,
-                ["type"] = header.Type,
-                ["period_start"] = dialog.PeriodStart,
-                ["period_end"] = dialog.PeriodEnd
-            },
-            DocumentOrigin.Ledger,
-            companyId);
+        long documentId;
 
-        foreach (var (node, values) in BookProjection.Rows(schema, rows))
-            _workspace.Documents.SaveRows(documentId, node, values);
+        try
+        {
+            var rows = Collect(companyId, stage, dialog.From, dialog.To);
+            var schema = _service.GetSchema("book");
+            var header = BookProjection.Header(company.Eik, dialog.From, dialog.To);
+
+            documentId = _workspace.Documents.Create(
+                "book",
+                BookNodes.Report,
+                dialog.SuggestedTitle(company.Name),
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["year"] = header.Year.ToString(),
+                    ["quarter"] = header.Quarter.ToString(),
+                    ["eik"] = header.Eik,
+                    ["type"] = header.Type,
+                    ["period_start"] = dialog.PeriodStart,
+                    ["period_end"] = dialog.PeriodEnd
+                },
+                DocumentOrigin.Ledger,
+                companyId);
+
+            foreach (var (node, values) in BookProjection.Rows(schema, rows))
+                _workspace.Documents.SaveRows(documentId, node, values);
+        }
+        finally
+        {
+            UseWaitCursor = false;
+            Cursor.Current = Cursors.Default;
+        }
 
         DocumentsChanged?.Invoke(this, EventArgs.Empty);
 
@@ -1050,53 +1303,169 @@ internal sealed class LedgerPage : ContentPage
     internal IReadOnlyList<BookRow> ReportRows(LedgerPeriod from, LedgerPeriod to) =>
         Company() is { } companyId ? Collect(companyId, Stage(), from, to) : [];
 
-    /// <summary>Колко реда ще влязат, колко са без произход и колко чакат в „Третиран“.</summary>
-    private (int Rows, int Missing, decimal Waiting) Weigh(
-        long companyId, string stage, LedgerPeriod from, LedgerPeriod to)
+    /// <summary>
+    /// Колко реда ще влязат, колко са без произход, какво чака в „Третиран“ и
+    /// какво ще каже проверката по схемата.
+    ///
+    /// Проверката минава по същия път като съставения отчет
+    /// (<see cref="BookProjection.Build"/> → <c>ImportProcessor</c>): тук не се
+    /// пишат нови правила, а се пита предварително онова, което редакторът би
+    /// казал след съставянето.
+    /// </summary>
+    internal BookWeight Weigh(string eik, long companyId, string stage, LedgerPeriod from, LedgerPeriod to)
     {
-        var moves = BookProjection.Submittable(_workspace.Ledger.Read(companyId, stage), from, to).ToList();
+        var all = _workspace.Ledger.Read(companyId, stage);
+        var links = _workspace.Ledger.Links(companyId, stage);
+        var moves = BookProjection.Submittable(all, from, to).ToList();
 
         var covered = new Dictionary<long, decimal>();
 
-        foreach (var link in _workspace.Ledger.Links(companyId, stage))
+        foreach (var link in links)
             covered[link.MoveId] = covered.GetValueOrDefault(link.MoveId) + link.Amount;
 
         var missing = moves.Count(m => SplitMath.Round(m.Amount - covered.GetValueOrDefault(m.Id)) > 0);
 
-        var waiting = SplitMath.Round(Waiting(companyId, stage, from, to).Sum(w => w.Amount));
+        var waiting = Reconcile.WaitingByMonth(_workspace.Batches.List(companyId, stage), all, links, from, to);
 
-        return (moves.Count, missing, waiting);
+        // Спряното не се проверява: отчетът и без това няма да излезе, а
+        // грешките по схемата биха изместили единствената причина, която важи.
+        if (waiting.Count > 0 || moves.Count == 0) return new BookWeight(moves.Count, missing, waiting, [], 0);
+
+        var (problems, count) = Validate(eik, companyId, stage, from, to);
+
+        return new BookWeight(moves.Count, missing, waiting, problems, count);
     }
 
     /// <summary>
-    /// Кои месеци от периода още не са изпразнили склад „Третиран“.
-    ///
-    /// По месеци, а не общо: отчетът е за период, но приключването е месечно и
-    /// човекът трябва да знае В КОЙ месец да търси. Гледа се наличността в края
-    /// на всеки месец — третирано на 30 септември и образувано на 2 октомври е
-    /// неприключен септември, колкото и наред да е октомври.
+    /// Най-честите грешки, които проверката по схемата ще намери — събрани по
+    /// съобщение: „липсва ЕИК — 412 реда“ казва повече от 412 еднакви реда.
     /// </summary>
-    private List<(LedgerPeriod Month, decimal Amount)> Waiting(
-        long companyId, string stage, LedgerPeriod from, LedgerPeriod to)
+    private (IReadOnlyList<string> Problems, int Count) Validate(
+        string eik, long companyId, string stage, LedgerPeriod from, LedgerPeriod to)
     {
-        var batches = _workspace.Batches.List(companyId, stage);
-        var moves = _workspace.Ledger.Read(companyId, stage);
-        var links = _workspace.Ledger.Links(companyId, stage);
+        var schema = _service.GetSchema("book");
+        var header = BookProjection.Header(eik, from, to);
+        var result = _service.Process(BookProjection.Build(schema, header, Collect(companyId, stage, from, to)));
 
-        var open = new List<(LedgerPeriod, decimal)>();
+        var errors = result.AllIssues.Where(i => i.Severity == IssueSeverity.Error).ToList();
 
-        for (var month = from; month <= to; month = month.Next)
-        {
-            var total = StockMath.Waiting(batches, moves, links, month.Last).Total;
+        var grouped = errors
+            .GroupBy(i => (i.Where, i.Message))
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key.Where, StringComparer.CurrentCulture)
+            .Select(g => g.Count() == 1
+                ? $"{g.Key.Where}{Line(g.First())}: {g.Key.Message}"
+                : Lang.T($"{g.Key.Where}: {g.Key.Message} — {g.Count()} реда",
+                         $"{g.Key.Where}: {g.Key.Message} — {g.Count()} rows"))
+            .Concat(result.SchemaErrors.Select(e => Lang.T("Схема: ", "Schema: ") + e))
+            .ToList();
 
-            if (total > 0) open.Add((month, total));
-        }
+        const int most = 4;
 
-        return open;
+        var shown = grouped.Take(most).ToList();
+
+        if (grouped.Count > most)
+            shown.Add(Lang.T($"…и още {grouped.Count - most} вида", $"…and {grouped.Count - most} more kinds"));
+
+        return (shown, errors.Count + result.SchemaErrors.Count);
+
+        static string Line(Issue issue) => issue.ExcelRow is { } row ? Lang.T($", ред {row}", $", row {row}") : string.Empty;
     }
+
+    /// <summary>
+    /// Кои месеци от периода още не са изпразнили склад „Третиран“ — правилото
+    /// е в <see cref="Reconcile.WaitingByMonth"/>.
+    /// </summary>
+    private IReadOnlyList<WaitingMonth> Waiting(
+        long companyId, string stage, LedgerPeriod from, LedgerPeriod to) =>
+        Reconcile.WaitingByMonth(
+            _workspace.Batches.List(companyId, stage),
+            _workspace.Ledger.Read(companyId, stage),
+            _workspace.Ledger.Links(companyId, stage),
+            from,
+            to);
 
     /// <summary>Съставеният отчет е нов отчет — списъкът с отчети трябва да научи.</summary>
     public event EventHandler? DocumentsChanged;
+
+    /// <summary>
+    /// „Отвори „Третиран““ от проверката — обвивката показва склада към тази дата.
+    ///
+    /// Събитие, а не препратка към склада: страницата не знае за другите
+    /// страници, а кой екран е отворен, решава обвивката.
+    /// </summary>
+    public event EventHandler<StoreRequest>? StoreRequested;
+
+    /// <summary>
+    /// Целият списък с бележките за месеца — и пътят до всяка.
+    ///
+    /// Не смята наново: показва точно онова, на което стъпва присъдата отдолу, за
+    /// да не се разминат двете.
+    /// </summary>
+    private void Review()
+    {
+        if (Period() is not { } period) return;
+
+        var verdict = _verdict ?? new MonthVerdict(_checks.Text, _fix.Text, VerdictTone.Quiet);
+
+        using var dialog = new MonthCheckDialog(
+            _scope.Titled(Lang.T($"Проверка — {period.Title()}", $"Check — {period.Title()}")),
+            verdict, _issues, _waiting);
+
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        switch (dialog.Action)
+        {
+            case CheckAction.ShowMove when dialog.MoveId is { } id:
+                ShowMove(id);
+                break;
+
+            case CheckAction.OpenTreated:
+                StoreRequested?.Invoke(this, new StoreRequest(StoreKind.Treated, period.Last));
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Отива до движението — в неговия месец, без сито и без търсене, които биха
+    /// го скрили — и го избира.
+    /// </summary>
+    internal bool ShowMove(long moveId)
+    {
+        if (Company() is not { } companyId) return false;
+
+        if (_workspace.Ledger.Read(companyId, Stage()).FirstOrDefault(m => m.Id == moveId) is not { } move)
+            return false;
+
+        _filling = true;
+
+        try
+        {
+            _kind.SelectedIndex = 0;
+            _search.Text = string.Empty;
+            _wanted = LedgerPeriod.Of(move.Date);
+            FillMonths();
+        }
+        finally
+        {
+            _filling = false;
+        }
+
+        Rebuild();
+
+        foreach (DataGridViewRow row in _grid.Rows)
+        {
+            if (row.Tag is not long id || id != moveId) continue;
+
+            _grid.CurrentCell = row.Cells[DateColumn];
+            Reveal(row.Index);
+
+            _grid.Focus();
+            return true;
+        }
+
+        return false;
+    }
 
     protected override bool ProcessCmdKey(ref Message message, Keys keys)
     {
@@ -1108,6 +1477,15 @@ internal sealed class LedgerPage : ContentPage
 
             case Keys.Enter when _grid.Focused:
                 Edit();
+                return true;
+
+            // Търсенето — с клавиш, както в склада.
+            case Keys.Control | Keys.F:
+                _search.Focus();
+                return true;
+
+            case Keys.Escape when _search.ContainsFocus && _search.Text.Length > 0:
+                _search.Text = string.Empty;
                 return true;
 
             // Месецът е на страницата, а не на таблицата: въртенето му работи и
@@ -1122,6 +1500,13 @@ internal sealed class LedgerPage : ContentPage
         }
 
         return base.ProcessCmdKey(ref message, keys);
+    }
+
+    /// <summary>Ctrl+F от главния прозорец — курсорът отива в търсенето.</summary>
+    public override bool FocusSearch()
+    {
+        _search.Focus();
+        return true;
     }
 
     // ------------------------------------------------------------- за теста
@@ -1158,6 +1543,56 @@ internal sealed class LedgerPage : ContentPage
     internal string SummaryText => _summary.Text;
 
     internal string ChecksText => _checks.Text;
+
+    /// <summary>Какво да се направи — вторият ред под присъдата.</summary>
+    internal string FixText => _fix.Text;
+
+    /// <summary>Цветът на присъдата — от него се чете тежестта.</summary>
+    internal Color ChecksColour => _checks.ForeColor;
+
+    /// <summary>Надписът на „Проверка…“ — носи броя на бележките.</summary>
+    internal string ReviewText => _review?.Text ?? string.Empty;
+
+    /// <summary>Какво намира проверката сега — същото, което „Проверка…“ показва.</summary>
+    internal IReadOnlyList<LedgerIssue> Found => _issues;
+
+    /// <summary>Търси в месеца, както човек пише в полето.</summary>
+    internal void UseSearch(string text)
+    {
+        _search.Text = text;
+        Rebuild();
+    }
+
+    /// <summary>Номерът на движението на избрания ред — проверява, че изборът оцелява.</summary>
+    internal long? SelectedMove => Selected();
+
+    /// <summary>Избира реда, както с мишката.</summary>
+    internal void Pick(int row) => _grid.CurrentCell = _grid.Rows[row].Cells[DateColumn];
+
+    /// <summary>Махане без питане — за теста; връща отказа, ако има такъв.</summary>
+    internal string? RemoveForTest(long moveId)
+    {
+        if (Company() is not { } companyId) return "няма фирма";
+
+        var moves = _workspace.Ledger.Read(companyId, Stage());
+
+        if (moves.FirstOrDefault(m => m.Id == moveId) is not { } move) return "няма движение";
+
+        if (_workspace.Periods.IsClosed(companyId, Stage(), LedgerPeriod.Of(move.Date))) return "затворен";
+
+        if (Refused(moves, _workspace.Ledger.Links(companyId, Stage()), moveId) is { } why) return why;
+
+        _workspace.Writer.Remove(companyId, moveId);
+        Refresh();
+
+        return null;
+    }
+
+    /// <summary>Какво би казало съставянето за този период — без прозорец.</summary>
+    internal BookWeight WeighForTest(LedgerPeriod from, LedgerPeriod to) =>
+        Company() is { } companyId && _workspace.Companies.Find(companyId) is { } company
+            ? Weigh(company.Eik, companyId, Stage(), from, to)
+            : BookWeight.Empty;
 
     internal IReadOnlyList<string> MonthChoices => [.. _month.Items.Cast<string>()];
 
@@ -1259,3 +1694,11 @@ internal sealed class LedgerPage : ContentPage
         return button.FitWidth();
     }
 }
+
+/// <summary>
+/// Кой склад към коя дата да се покаже — молбата на „Месец“ към обвивката.
+///
+/// Проверката на месеца казва „в „Третиран“ чакат 1,250 т“; оттук човек отива
+/// направо там, където се образува, вместо да търси склада и датата сам.
+/// </summary>
+internal sealed record StoreRequest(StoreKind Store, DateOnly On);

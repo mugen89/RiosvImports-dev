@@ -11345,7 +11345,8 @@ Console.WriteLine("### ТЕСТ - прозорчетата не слагат с�
     foreach (var problem in barProblems) Console.WriteLine("     " + problem);
 
     Check("основата се сглобява без изключение", barError is null);
-    Check($"проверени са всичките {barNotes.Count} прозореца", barNotes.Count == 34,
+    // 35: с проверката на месеца (MonthCheckDialog, 1.3.1).
+    Check($"проверени са всичките {barNotes.Count} прозореца", barNotes.Count == 35,
         $"{barNotes.Count}");
     Check("програмата стои на лентата с едно копче", barProblems.Count == 0,
         $"{barProblems.Count} проблема" + (barProblems.Count > 0 ? ": " + string.Join(" | ", barProblems.Take(5)) : ""));
@@ -17119,6 +17120,508 @@ Console.WriteLine("### ТЕСТ - обновяване и известия");
     Check($"направени са всичките {uiNotes.Count} проверки на екраните", uiNotes.Count == 31, $"{uiNotes.Count}");
     Check("началният екран, настройките и лентата казват едно и също", uiProblems.Count == 0, $"{uiProblems.Count} проблема");
 }
+
+// =============================================== 1.3.1: „Месец“ казва защо отчетът не излиза
+//
+// Дотук под таблицата стоеше първата бележка от списъка, отрязана на един ред, а
+// съставянето казваше „чакат 1,250 т“ без месец и пускаше копчето „Състави“, за
+// да откаже след натискането. Сега присъдата казва може ли, защо не и какво да
+// се направи; проверката показва целия списък; съставянето назовава месеца и
+// купчините и гаси копчето. Внасянето от файл вече е само в „Склад“.
+Console.WriteLine();
+Console.WriteLine("### ТЕСТ - „Месец“ казва защо отчетът не излиза и не внася файлове");
+{
+    var whyNotes = new List<string>();
+    string? whyError = null;
+
+    var whyThread = new Thread(() =>
+    {
+        try
+        {
+            var whyPath = Path.Combine(work, $"why_{Guid.NewGuid():N}.db");
+            using var db = Workspace.Open(whyPath);
+
+            var companyId = db.Companies.Add("203344556", "Метал ООД");
+
+            // Август: само приемане — отчетът излиза.
+            var august = db.Writer.Write(companyId, new MoveRequest(
+                MoveKind.Received, new DateOnly(2026, 8, 4), "170405", 10m,
+                Eik: "204455667", Partner: "Скрап ЕООД", Document: "Протокол 1330"));
+
+            db.Writer.Write(companyId, new MoveRequest(
+                MoveKind.Received, new DateOnly(2026, 8, 6), "150101", 3m,
+                Eik: "205566778", Partner: "Хартия АД"));
+
+            // Септември: третирано без образувано — отчетът спира.
+            var treated = db.Writer.Write(companyId, new MoveRequest(
+                MoveKind.Treated, new DateOnly(2026, 9, 5), "170405", 6m));
+
+            var september = new LedgerPeriod(2026, 9);
+            var augustMonth = new LedgerPeriod(2026, 8);
+
+            using (var ledger = new LedgerPage(service, db))
+            {
+                ledger.UseMonth(september);
+
+                whyNotes.Add(ledger.ChecksText.Contains("не може да се състави", StringComparison.Ordinal) &&
+                             ledger.ChecksText.Contains("6,000", StringComparison.Ordinal)
+                    ? "" : "присъдата не казва, че отчетът спира и колко чака: " + ledger.ChecksText);
+
+                whyNotes.Add(ledger.FixText.Contains("Образувай", StringComparison.Ordinal) &&
+                             ledger.FixText.Contains("170405", StringComparison.Ordinal)
+                    ? "" : "поправката не казва къде и коя купчина: " + ledger.FixText);
+
+                whyNotes.Add(ledger.ChecksColour == Theme.Error ? "" : "спрян отчет не е в червено");
+
+                whyNotes.Add(ledger.Found.Any(i => i.StopsReport)
+                    ? "" : "проверката не отбелязва, че спира отчета");
+
+                whyNotes.Add(ledger.ReviewText.Contains($"({ledger.Found.Count})", StringComparison.Ordinal)
+                    ? "" : "„Проверка…“ не носи броя: " + ledger.ReviewText);
+
+                whyNotes.Add(!ledger.CanCompose(september, september) ? "" : "септември се съставя, докато чака");
+
+                var weight = ledger.WeighForTest(september, september);
+
+                whyNotes.Add(weight.Blocked && weight.Waiting.Count == 1 &&
+                             weight.Waiting[0].Month == september &&
+                             weight.Waiting[0].Named().Contains("170405", StringComparison.Ordinal)
+                    ? "" : "съставянето не назовава месеца и купчината");
+
+                // Прозорецът за съставяне: спряното тримесечие отваря месеца, който
+                // може, и казва изхода; спряното копче не се натиска.
+                using (var book = new BookDialog(augustMonth, (from, to) => ledger.WeighForTest(from, to)))
+                {
+                    whyNotes.Add(book.ScopeIndex == 0 && book.ComposeOffered
+                        ? "" : "готов месец в неготово тримесечие не се предлага сам");
+
+                    book.UseScope(1);
+
+                    whyNotes.Add(!book.ComposeOffered ? "" : "„Състави“ работи за спряно тримесечие");
+
+                    whyNotes.Add(book.PreviewText.Contains("септември 2026", StringComparison.Ordinal) &&
+                                 book.PreviewText.Contains("Отчет само за август 2026", StringComparison.Ordinal)
+                        ? "" : "спряното тримесечие не казва месеца и изхода: " + book.PreviewText);
+                }
+
+                // Августът е чист, но тримесечието — не: и това се казва.
+                ledger.UseMonth(augustMonth);
+
+                whyNotes.Add(ledger.ChecksText.Contains("може да се състави", StringComparison.Ordinal) &&
+                             !ledger.ChecksText.Contains("не може", StringComparison.Ordinal)
+                    ? "" : "чистият месец не казва, че отчетът излиза: " + ledger.ChecksText);
+
+                whyNotes.Add(ledger.FixText.Contains("Тримесечието още не е готово", StringComparison.Ordinal) &&
+                             ledger.FixText.Contains("септември", StringComparison.Ordinal)
+                    ? "" : "не се казва, че тримесечието чака септември: " + ledger.FixText);
+
+                // Проверката: целият списък, с думата „спира отчета“ и пътя до склада.
+                ledger.UseMonth(september);
+
+                using (var check = new MonthCheckDialog("Проверка", MonthVerdict.For(september, 1, false,
+                           ledger.Found, [ledger.WeighForTest(september, september).Waiting[0]]),
+                           ledger.Found, ledger.WeighForTest(september, september).Waiting[0]))
+                {
+                    whyNotes.Add(check.EntryCount == ledger.Found.Count ? "" : $"проверката показва {check.EntryCount} реда");
+                    whyNotes.Add(check.Words.FirstOrDefault() == "Спира отчета"
+                        ? "" : "първият ред не е това, което спира отчета: " + string.Join(", ", check.Words));
+                    whyNotes.Add(check.TreatedOffered ? "" : "„Отвори „Третиран““ го няма");
+
+                    check.Pick(0);
+
+                    whyNotes.Add(check.DetailText.Contains("Какво да се направи", StringComparison.Ordinal) &&
+                                 check.DetailText.Contains("170405", StringComparison.Ordinal)
+                        ? "" : "избраното не казва какво да се направи: " + check.DetailText);
+
+                    check.Press();
+
+                    whyNotes.Add(check.Action == CheckAction.OpenTreated ? "" : "двойното щракване не води до склада");
+                }
+
+                // Обявеното образуване изпразва „Третиран“ — и присъдата се обръща.
+                db.Writer.Write(companyId, new MoveRequest(
+                    MoveKind.Generated, new DateOnly(2026, 9, 7), "191202", 6m));
+
+                ledger.Refresh();
+
+                whyNotes.Add(!ledger.ChecksText.Contains("не може да се състави", StringComparison.Ordinal) &&
+                             ledger.CanCompose(september, september)
+                    ? "" : "след образуването отчетът пак спира: " + ledger.ChecksText);
+
+                // Търсенето: по клиент, по документ зад партидата, по код.
+                ledger.UseMonth(augustMonth);
+
+                ledger.UseSearch("скрап");
+                whyNotes.Add(ledger.RowCount == 1 && ledger.SummaryText.Contains("Показани 1 реда", StringComparison.Ordinal)
+                    ? "" : $"търсенето по клиент дава {ledger.RowCount} реда: " + ledger.SummaryText);
+
+                ledger.UseSearch("1330");
+                whyNotes.Add(ledger.RowCount == 1 ? "" : $"търсенето по документ дава {ledger.RowCount} реда");
+
+                ledger.UseSearch("150101 хартия");
+                whyNotes.Add(ledger.RowCount == 1 ? "" : $"две думи наведнъж дават {ledger.RowCount} реда");
+
+                ledger.UseSearch(string.Empty);
+                whyNotes.Add(ledger.RowCount == 2 && !ledger.SummaryText.Contains("Показани", StringComparison.Ordinal)
+                    ? "" : "изчистеното търсене не връща всичко");
+
+                // Избраният ред оцелява при пресмятане.
+                ledger.Pick(1);
+                var chosen = ledger.SelectedMove;
+                ledger.Refresh();
+
+                whyNotes.Add(chosen is not null && ledger.SelectedMove == chosen
+                    ? "" : "изборът се губи при пресмятане");
+
+                // Махането гледа веригата (дефект 9): от приемането е черпено.
+                var refusal = ledger.RemoveForTest(august);
+
+                whyNotes.Add(refusal is not null && refusal.Contains("вече е взето", StringComparison.Ordinal) &&
+                             db.Ledger.Read(companyId).Any(m => m.Id == august)
+                    ? "" : "приемане, от което е черпено, се маха: " + (refusal ?? "махна се"));
+
+                // Затвореният месец не се маха.
+                db.Periods.Close(companyId, "1", augustMonth);
+
+                var other = db.Ledger.Read(companyId).First(m => m.Kind == MoveKind.Received && m.Id != august).Id;
+
+                whyNotes.Add(ledger.RemoveForTest(other) == "затворен" &&
+                             db.Ledger.Read(companyId).Any(m => m.Id == other)
+                    ? "" : "от затворен месец се маха");
+
+                db.Periods.Reopen(companyId, "1", augustMonth);
+
+                whyNotes.Add(ledger.RemoveForTest(other) is null && db.Ledger.Read(companyId).All(m => m.Id != other)
+                    ? "" : "свободно приемане не се маха");
+
+                // И таблицата на месеца спира записа, щом махнатият ред е черпен.
+                using (var sheet = new MoveSheetDialog(service, db, companyId, "1", MoveKind.Received, augustMonth))
+                {
+                    sheet.Grid!.RemoveRows([0]);
+                    sheet.AcceptForTest();
+
+                    whyNotes.Add(!sheet.Saved && sheet.Refusal.Contains("вече е взето", StringComparison.Ordinal) &&
+                                 db.Ledger.Read(companyId).Any(m => m.Id == august)
+                        ? "" : "таблицата маха черпено приемане: " + sheet.Refusal);
+                }
+
+                whyNotes.Add(treated > 0 ? "" : "третирането не се записа");
+            }
+
+            // Внасянето от файл: от „Месец“ го няма и се казва къде е; от склада го има.
+            using (var month = new MoveSheetDialog(service, db, companyId, "1", MoveKind.Received, augustMonth))
+            {
+                whyNotes.Add(!month.ImportOffered ? "" : "„Месец“ още внася файлове");
+                whyNotes.Add(month.HintText.Contains("Склад", StringComparison.Ordinal) &&
+                             month.HintText.Contains("Внеси", StringComparison.Ordinal)
+                    ? "" : "не се казва къде се внася: " + month.HintText);
+            }
+
+            using (var store = new MoveSheetDialog(service, db, companyId, "1", MoveKind.Received, augustMonth,
+                       SheetImport.Offered))
+                whyNotes.Add(store.ImportOffered && store.HintText.Length == 0
+                    ? "" : "от склада внасянето го няма");
+
+            using (var locked = new MoveSheetDialog(service, db, companyId, "1", MoveKind.Treated, augustMonth,
+                       SheetImport.Offered))
+                whyNotes.Add(!locked.ImportOffered ? "" : "заключеното третиране се внася");
+
+            // Присъдата без прозорец: затворен и празен месец.
+            var closed = MonthVerdict.For(augustMonth, 3, closed: true, [], []);
+            whyNotes.Add(closed.Text.StartsWith("Август 2026 е затворен", StringComparison.Ordinal)
+                ? "" : "затвореният месец: " + closed.Text);
+
+            var empty = MonthVerdict.For(new LedgerPeriod(2026, 10), 0, false, [], []);
+            whyNotes.Add(empty.Tone == VerdictTone.Quiet && empty.Fix.Contains("Внеси", StringComparison.Ordinal)
+                ? "" : "празният месец не казва откъде се внася: " + empty.Fix);
+
+            // Недостигът назовава склада и сочи движението.
+            var short_ = Reconcile.Negative(
+            [
+                new Move(1, MoveKind.Received, new DateOnly(2026, 9, 1), "170405", 2m),
+                new Move(2, MoveKind.Treated, new DateOnly(2026, 9, 2), "170405", 5m)
+            ], StoreKind.Received);
+
+            whyNotes.Add(short_.Count == 1 && short_[0].MoveId == 2 && short_[0].Store == StoreKind.Received &&
+                         short_[0].Text.Contains("„Получен“", StringComparison.Ordinal) && short_[0].Fix.Length > 0
+                ? "" : "недостигът не казва склада и движението: " + (short_.Count > 0 ? short_[0].Text : "няма"));
+        }
+        catch (Exception ex)
+        {
+            whyError = ex.ToString();
+        }
+    });
+
+    whyThread.SetApartmentState(ApartmentState.STA);
+    whyThread.Start();
+    whyThread.Join();
+
+    if (whyError is not null) Console.WriteLine("     " + whyError);
+
+    var whyProblems = whyNotes.Where(n => n.Length > 0).ToList();
+    foreach (var problem in whyProblems) Console.WriteLine("     " + problem);
+
+    Check("„Месец“ и съставянето минават без изключение", whyError is null);
+    Check($"направени са всичките {whyNotes.Count} проверки", whyNotes.Count == 35, $"{whyNotes.Count}");
+    Check("„Месец“ казва защо отчетът не излиза и какво да се направи", whyProblems.Count == 0,
+        $"{whyProblems.Count} проблема" + (whyProblems.Count > 0 ? ": " + string.Join(" | ", whyProblems.Take(5)) : ""));
+}
+
+
+// =============================================== 1.3.1: базата до програмата
+//
+// Работата стои в „Data“ до програмата, а при инсталирана — над „current“, която
+// Velopack сменя при всяко обновяване. Старата база от профила се пренася веднъж,
+// преименува се и до нея остава бележка; при деинсталиране работата се връща в
+// профила. Нищо тук не пипа истинския профил: всички пътища са временни.
+Console.WriteLine();
+Console.WriteLine("### ТЕСТ - базата стои до програмата и се пренася от профила");
+{
+    var placeNotes = new List<string>();
+    string? placeError = null;
+
+    try
+    {
+        var root = Path.Combine(work, $"place_{Guid.NewGuid():N}");
+
+        // Инсталирана: „current“ с Update.exe отгоре — коренът е горната папка.
+        var installed = Path.Combine(root, "RiosvImports");
+        var current = Path.Combine(installed, "current");
+        Directory.CreateDirectory(current);
+        File.WriteAllText(Path.Combine(installed, "Update.exe"), string.Empty);
+
+        placeNotes.Add(string.Equals(DataLocation.Root(current), installed, StringComparison.OrdinalIgnoreCase)
+            ? "" : "инсталираната пише в „current“: " + DataLocation.Root(current));
+
+        placeNotes.Add(string.Equals(DataLocation.Root(current + Path.DirectorySeparatorChar), installed,
+                StringComparison.OrdinalIgnoreCase)
+            ? "" : "наклонената черта накрая обърква корена");
+
+        // „current“ без Update.exe е просто папка с такова име.
+        var loose = Path.Combine(root, "loose", "current");
+        Directory.CreateDirectory(loose);
+
+        placeNotes.Add(string.Equals(DataLocation.Root(loose), loose, StringComparison.OrdinalIgnoreCase)
+            ? "" : "папка „current“ без Update.exe се брои за инсталирана");
+
+        var folder = Path.Combine(root, "folder");
+        Directory.CreateDirectory(folder);
+
+        placeNotes.Add(string.Equals(DataLocation.Resolve(folder, Path.Combine(root, "profile")),
+                Path.Combine(folder, DataLocation.FolderName), StringComparison.OrdinalIgnoreCase)
+            ? "" : "до програмата не се пише в „Data“");
+
+        // Папка, в която не може да се пише: на мястото на „Data“ стои файл.
+        var blocked = Path.Combine(root, "blocked");
+        Directory.CreateDirectory(blocked);
+        File.WriteAllText(Path.Combine(blocked, DataLocation.FolderName), string.Empty);
+
+        placeNotes.Add(!DataLocation.Writable(Path.Combine(blocked, DataLocation.FolderName))
+            ? "" : "невъзможна папка се брои за пригодна");
+
+        placeNotes.Add(string.Equals(DataLocation.Resolve(blocked, Path.Combine(root, "profile")),
+                Path.Combine(root, "profile"), StringComparison.OrdinalIgnoreCase)
+            ? "" : "неписаемата папка не връща към профила");
+
+        // Пренасяне: базата в профила отива до програмата — с последните записи от WAL.
+        var profile = Path.Combine(root, "profile");
+        Directory.CreateDirectory(profile);
+
+        var old = Path.Combine(profile, DataLocation.FileName);
+        var target = Path.Combine(installed, DataLocation.FolderName, DataLocation.FileName);
+
+        using (var db = Workspace.Open(old))
+        {
+            db.Companies.Add("203344556", "Метал ООД");
+            db.Writer.Write(db.Companies.List()[0].Id, new MoveRequest(
+                MoveKind.Received, new DateOnly(2026, 9, 1), "170405", 4m, Eik: "204455667", Partner: "Скрап ЕООД"));
+        }
+
+        SqliteConnection.ClearAllPools();
+
+        var moved = DataLocation.Adopt(old, target);
+
+        placeNotes.Add(moved == AdoptOutcome.Moved ? "" : "базата от профила не се пренесе: " + moved);
+        placeNotes.Add(File.Exists(target) ? "" : "до програмата няма база");
+        placeNotes.Add(!File.Exists(old) && File.Exists(DataLocation.Retired(old))
+            ? "" : "старото копие не е преименувано");
+        placeNotes.Add(File.Exists(Path.Combine(profile, "ПРЕМЕСТЕНА.txt")) ? "" : "в профила няма бележка къде е работата");
+        placeNotes.Add(!File.Exists(target + ".partial") ? "" : "остана наполовина копирана база");
+
+        using (var db = Workspace.Open(target))
+            placeNotes.Add(db.Companies.List().Count == 1 && db.Ledger.Read(db.Companies.List()[0].Id).Count == 1
+                ? "" : "пренесената база е без работата");
+
+        SqliteConnection.ClearAllPools();
+
+        // Второ пускане: тук вече има база — нищо не се пипа.
+        placeNotes.Add(DataLocation.Adopt(old, target) == AdoptOutcome.Nothing ? "" : "пренася се втори път");
+
+        // Без база в профила — нищо.
+        placeNotes.Add(DataLocation.Adopt(Path.Combine(profile, "none.db"), Path.Combine(folder, "Data", "x.db"))
+                       == AdoptOutcome.Nothing
+            ? "" : "пренася се несъществуваща база");
+
+        // Деинсталиране: работата се връща в профила и нищо не се презаписва.
+        var back = DataLocation.Rescue(Path.GetDirectoryName(target)!, profile);
+
+        placeNotes.Add(back is not null && string.Equals(back, Path.Combine(profile, DataLocation.FileName),
+                StringComparison.OrdinalIgnoreCase) && File.Exists(back)
+            ? "" : "деинсталирането не връща работата в профила: " + back);
+
+        var again = DataLocation.Rescue(Path.GetDirectoryName(target)!, profile);
+
+        placeNotes.Add(again is not null && !string.Equals(again, back, StringComparison.OrdinalIgnoreCase) && File.Exists(again)
+            ? "" : "второто връщане презаписва първото");
+
+        placeNotes.Add(DataLocation.Rescue(profile, profile) is null ? "" : "профилът се копира сам в себе си");
+
+        // И връщането от профила при ново инсталиране: същото пренасяне.
+        SqliteConnection.ClearAllPools();
+        File.Delete(target);
+
+        placeNotes.Add(DataLocation.Adopt(back!, target) == AdoptOutcome.Moved ? "" : "върнатата работа не се взема обратно");
+
+        // Последните записи от WAL пътуват с копието, дори базата да е отворена.
+        var live = Path.Combine(root, "live.db");
+        var copy = Path.Combine(root, "live-copy.db");
+
+        using (var db = Workspace.Open(live))
+        {
+            db.Companies.Add("175000111", "Жива ООД");
+
+            Workspace.Copy(live, copy);
+        }
+
+        SqliteConnection.ClearAllPools();
+
+        using (var db = Workspace.Open(copy))
+            placeNotes.Add(db.Companies.List().Any(c => c.Name == "Жива ООД") ? "" : "копието изпусна последния запис");
+
+        SqliteConnection.ClearAllPools();
+    }
+    catch (Exception ex)
+    {
+        placeError = ex.ToString();
+    }
+
+    if (placeError is not null) Console.WriteLine("     " + placeError);
+
+    var placeProblems = placeNotes.Where(n => n.Length > 0).ToList();
+    foreach (var problem in placeProblems) Console.WriteLine("     " + problem);
+
+    Check("мястото на базата се решава без изключение", placeError is null);
+    Check($"направени са всичките {placeNotes.Count} проверки", placeNotes.Count == 19, $"{placeNotes.Count}");
+    Check("базата стои до програмата, пренася се веднъж и не се губи при деинсталиране", placeProblems.Count == 0,
+        $"{placeProblems.Count} проблема" + (placeProblems.Count > 0 ? ": " + string.Join(" | ", placeProblems.Take(5)) : ""));
+}
+
+
+// =============================================== 1.3.1: изчистване за тестване
+//
+// Тестващият внася един и същ дневник отново и отново. Копчето в „Настройки“
+// маха склада и внесеното за всички фирми — след резервно копие — и оставя
+// фирмите, отчетите, списъците и настройките.
+Console.WriteLine();
+Console.WriteLine("### ТЕСТ - „За тестване“ изчиства склада и внесеното, а останалото остава");
+{
+    var clearNotes = new List<string>();
+    string? clearError = null;
+
+    var clearThread = new Thread(() =>
+    {
+        try
+        {
+            var clearPath = Path.Combine(work, $"clear_{Guid.NewGuid():N}.db");
+            using var db = Workspace.Open(clearPath);
+
+            var first = db.Companies.Add("203344556", "Метал ООД");
+            var second = db.Companies.Add("204455667", "Хартия АД");
+
+            var received = db.Writer.Write(first, new MoveRequest(
+                MoveKind.Received, new DateOnly(2026, 9, 1), "170405", 10m, Eik: "205566778", Partner: "Скрап ЕООД"));
+
+            var treated = db.Writer.Write(first, new MoveRequest(
+                MoveKind.Treated, new DateOnly(2026, 9, 3), "170405", 4m));
+
+            db.Writer.Write(second, new MoveRequest(
+                MoveKind.Received, new DateOnly(2026, 8, 1), "150101", 2m, Eik: "205566778", Partner: "Скрап ЕООД"));
+
+            var import = db.Imports.Begin(first, ImportSource.Demetra, "м.09.2026.xlsx");
+            db.Imports.Track(import, ImportTarget.Move, [received]);
+
+            db.Actions.Add(first, "1", MoveKind.Treated, treated, new DateOnly(2026, 9, 3), "170405", 4m, action: "проба");
+            db.Periods.Close(first, "1", new LedgerPeriod(2026, 8));
+            db.Setup.SetStart(first, new LedgerPeriod(2026, 8));
+
+            var report = db.Documents.Create("book", BookNodes.Report, "Проба", origin: DocumentOrigin.Ledger, companyId: first);
+            db.Partners.Remember(first, "Леярна Юг АД", "175000111");
+            db.Settings.Set(SettingsStore.Keys.UiTheme, "dark");
+
+            var before = db.CountStock();
+
+            clearNotes.Add(before.Moves == 3 && before.Batches == 2 && before.Imports == 1 && before.Logged == 1 &&
+                           before.Closed == 1 && before.Starts == 1 && !before.IsEmpty
+                ? "" : $"броят преди е грешен: {before}");
+
+            string backup;
+
+            using (var settings = new SettingsPage(db))
+                backup = settings.ClearWithBackup();
+
+            clearNotes.Add(File.Exists(backup) ? "" : "резервното копие го няма");
+            clearNotes.Add(db.CountStock().IsEmpty ? "" : "остана склад: " + db.CountStock());
+            clearNotes.Add(db.Ledger.Read(first).Count == 0 && db.Ledger.Read(second).Count == 0
+                ? "" : "движенията на някоя фирма останаха");
+            clearNotes.Add(db.Imports.List().Count == 0 ? "" : "внесените файлове останаха");
+            clearNotes.Add(db.Setup.Start(first) is null ? "" : "началото на воденето остана");
+            clearNotes.Add(!db.Periods.IsClosed(first, "1", new LedgerPeriod(2026, 8)) ? "" : "затвореният месец остана");
+
+            // Остават фирмите, отчетите, списъците и настройките.
+            clearNotes.Add(db.Companies.List().Count == 2 ? "" : "фирмите се изтриха");
+            clearNotes.Add(db.Documents.Find(report) is not null ? "" : "отчетът се изтри");
+            clearNotes.Add(db.Partners.List(first).Any(p => p.Name == "Леярна Юг АД") ? "" : "получателите се изтриха");
+            clearNotes.Add(db.Settings.Get(SettingsStore.Keys.UiTheme) == "dark" ? "" : "настройките се изтриха");
+
+            // Копието носи изтритото — от него работата се връща.
+            using (var copy = Workspace.Open(backup))
+                clearNotes.Add(copy.Ledger.Read(first).Count == 2 && copy.Imports.List().Count == 1
+                    ? "" : "резервното копие е без склада");
+
+            SqliteConnection.ClearAllPools();
+
+            // Склад, отворен към края на месеца — с едно пресмятане и без филтри.
+            using (var stock = new StockPage(service, db))
+            {
+                stock.UseSearch("нищо такова");
+                stock.Open(StoreKind.Treated, new DateOnly(2026, 9, 30));
+
+                clearNotes.Add(stock.CurrentDate == new DateOnly(2026, 9, 30) && stock.ImportKind == MoveKind.Treated
+                    ? "" : "складът не се отваря на „Третиран“ към датата");
+            }
+        }
+        catch (Exception ex)
+        {
+            clearError = ex.ToString();
+        }
+    });
+
+    clearThread.SetApartmentState(ApartmentState.STA);
+    clearThread.Start();
+    clearThread.Join();
+
+    if (clearError is not null) Console.WriteLine("     " + clearError);
+
+    var clearProblems = clearNotes.Where(n => n.Length > 0).ToList();
+    foreach (var problem in clearProblems) Console.WriteLine("     " + problem);
+
+    Check("изчистването минава без изключение", clearError is null);
+    Check($"направени са всичките {clearNotes.Count} проверки", clearNotes.Count == 13, $"{clearNotes.Count}");
+    Check("„За тестване“ маха склада и внесеното, а фирмите, отчетите и настройките остават",
+        clearProblems.Count == 0,
+        $"{clearProblems.Count} проблема" + (clearProblems.Count > 0 ? ": " + string.Join(" | ", clearProblems.Take(5)) : ""));
+}
+
 
 // =============================================== Лаптопът: нищо не се реже
 //

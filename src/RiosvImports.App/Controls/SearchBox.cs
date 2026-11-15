@@ -17,6 +17,21 @@ internal sealed class SearchBox : Card
     private readonly TextBox _input = new();
     private readonly AppButton _clear;
 
+    /// <summary>
+    /// Колко се чака след последния натиснат клавиш, преди да се търси.
+    ///
+    /// Търсенето в склада пресмята и рисува стотици редове наново. Пуснато на
+    /// всеки клавиш, „170405“ беше шест пресмятания едно след друго и полето
+    /// изоставаше от пръстите. Двеста милисекунди не се усещат като чакане, а
+    /// думата вече е написана.
+    /// </summary>
+    private const int Pause = 220;
+
+    private readonly System.Windows.Forms.Timer _typing = new() { Interval = Pause };
+
+    /// <summary>Текстът идва отвън, не от клавиатурата — търси се веднага.</summary>
+    private bool _setting;
+
     public SearchBox(string placeholder)
     {
         Fill = Theme.Canvas;
@@ -31,7 +46,30 @@ internal sealed class SearchBox : Card
         _input.TextChanged += (_, e) =>
         {
             _clear!.Visible = _input.Text.Length > 0;
-            TextChanged?.Invoke(this, e);
+
+            // Писаното се изчаква, подаденото — не: копче, тест или „Изчисти“
+            // искат отговора още сега, а не след пауза, която никой не чака.
+            if (_setting || !_input.Focused)
+            {
+                _typing.Stop();
+                TextChanged?.Invoke(this, e);
+                return;
+            }
+
+            _typing.Stop();
+            _typing.Start();
+        };
+
+        _typing.Tick += (_, _) => Flush();
+
+        // Enter не чака паузата: човекът е казал, че е готов.
+        _input.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Enter || !_typing.Enabled) return;
+
+            Flush();
+            e.Handled = true;
+            e.SuppressKeyPress = true;
         };
 
         // Не се закача отдясно: закачането го разтяга на цялата височина и той
@@ -46,7 +84,15 @@ internal sealed class SearchBox : Card
             Radius = 14
         };
 
-        _clear.Click += (_, _) => { _input.Clear(); _input.Focus(); };
+        _clear.Click += (_, _) =>
+        {
+            _setting = true;
+
+            try { _input.Clear(); }
+            finally { _setting = false; }
+
+            _input.Focus();
+        };
 
         Controls.Add(_input);
         Controls.Add(_clear);
@@ -82,7 +128,29 @@ internal sealed class SearchBox : Card
     public override string Text
     {
         get => _input.Text;
-        set => _input.Text = value ?? string.Empty;
+        set
+        {
+            _setting = true;
+
+            try { _input.Text = value ?? string.Empty; }
+            finally { _setting = false; }
+        }
+    }
+
+    /// <summary>Изчаканото търсене се пуска сега — ако има такова.</summary>
+    public void Flush()
+    {
+        if (!_typing.Enabled) return;
+
+        _typing.Stop();
+        TextChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _typing.Dispose();
+
+        base.Dispose(disposing);
     }
 
     public new void Focus() => _input.Focus();

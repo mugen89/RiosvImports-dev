@@ -29,6 +29,14 @@ internal abstract class ContentPage : UserControl
     /// <summary>Ширината, която съдържанието наистина получава.</summary>
     protected int ContentWidth => Math.Max(320, Math.Min(MaxContentWidth, Width - 2 * Theme.PageMargin));
 
+    /// <summary>
+    /// Слага курсора в търсенето на страницата — ако тя има такова.
+    ///
+    /// Ctrl+F се поема от главния прозорец, за да работи и когато курсорът
+    /// стои в лентата отляво или никъде. Страница без търсене връща „не“.
+    /// </summary>
+    public virtual bool FocusSearch() => false;
+
     protected override void OnLayout(LayoutEventArgs e)
     {
         var side = Math.Max(Theme.PageMargin, (Width - MaxContentWidth) / 2);

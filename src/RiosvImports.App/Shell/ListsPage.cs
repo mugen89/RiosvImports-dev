@@ -442,6 +442,8 @@ internal sealed class ListsPage : ContentPage
 
         grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.Surface;
         grid.ColumnHeadersDefaultCellStyle.ForeColor = Theme.InkStrong;
+        grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.Surface;
+        grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Theme.InkStrong;
         grid.ColumnHeadersDefaultCellStyle.Font = Theme.Bold;
         grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 6, 6, 6);
 
@@ -874,6 +876,13 @@ internal sealed class ListsPage : ContentPage
         var node = report?.SelfAndDescendants().FirstOrDefault(n => n.ElementName == finding.Node);
 
         return name + "  ▸  " + (node is not null ? ReportTitles.Table(node) : finding.Node);
+    }
+
+    /// <summary>Ctrl+F от главния прозорец — курсорът отива в търсенето.</summary>
+    public override bool FocusSearch()
+    {
+        _search.Focus();
+        return true;
     }
 
     // ------------------------------------------------------------- надписи

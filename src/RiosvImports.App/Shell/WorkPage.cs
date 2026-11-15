@@ -700,6 +700,13 @@ internal sealed class WorkPage : ContentPage
         }
     }
 
+    /// <summary>Ctrl+F от главния прозорец — курсорът отива в търсенето.</summary>
+    public override bool FocusSearch()
+    {
+        _search.Focus();
+        return true;
+    }
+
     // ------------------------------------------------------------- помощни
 
     private string? Prompt(string question, string current)

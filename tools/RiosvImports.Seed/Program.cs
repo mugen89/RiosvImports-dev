@@ -19,6 +19,9 @@ using RiosvImports.Data;
 //     dotnet run --project tools\RiosvImports.Seed
 //     dotnet run --project tools\RiosvImports.Seed -- --clear
 //     dotnet run --project tools\RiosvImports.Seed -- --db C:\път\до\workspace.db
+//
+// Без „--db“ се пълни базата на програмата, пусната от Visual Studio: от 1.3.1
+// тя стои до програмата, в „Data“ (src\RiosvImports.App\bin\Debug\…\Data).
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -29,7 +32,7 @@ const string Mark = "ПРОБА";
 long Overdrawn = 0;
 
 var clear = args.Contains("--clear");
-var path = Value("--db") ?? Workspace.DefaultPath();
+var path = Value("--db") ?? DefaultDatabase();
 
 Console.WriteLine($"база: {path}");
 
@@ -44,6 +47,21 @@ if (clear)
 Seed();
 
 return 0;
+
+// Базата на програмата от Visual Studio — до нея, в „Data“. Извън хранилището
+// (инструментът е копиран другаде) — старото място в профила.
+string DefaultDatabase()
+{
+    for (var folder = new DirectoryInfo(AppContext.BaseDirectory); folder is not null; folder = folder.Parent)
+    {
+        if (!File.Exists(Path.Combine(folder.FullName, "RiosvImports.sln"))) continue;
+
+        return Path.Combine(folder.FullName, "src", "RiosvImports.App", "bin", "Debug", "net9.0-windows",
+            "Data", "workspace.db");
+    }
+
+    return Workspace.DefaultPath();
+}
 
 string? Value(string name)
 {

@@ -1,14 +1,33 @@
 using System.Drawing.Drawing2D;
 using RiosvImports.Core.Import;
+using RiosvImports.Core.Localization;
 
 namespace RiosvImports.App.Controls;
 
-/// <summary>Един ред в списъка с проблеми.</summary>
-internal sealed record IssueEntry(IssueSeverity Severity, string Location, string Message)
+/// <summary>
+/// Един ред в списъка с проблеми.
+///
+/// <paramref name="Label"/> заменя думата за тежестта, когато „грешка“ не казва
+/// достатъчно: в проверката на месеца важното е КАКВО спира — отчетът или само
+/// затварянето. <paramref name="Tag"/> носи онова, зад което стои редът, за да
+/// може двойното щракване да води дотам.
+/// </summary>
+internal sealed record IssueEntry(
+    IssueSeverity Severity,
+    string Location,
+    string Message,
+    string Label = "",
+    object? Tag = null)
 {
     public static IssueEntry From(Issue issue) => new(issue.Severity, issue.Location, issue.Message);
 
-    public static IssueEntry Schema(string message) => new(IssueSeverity.Error, "Схема", message);
+    public static IssueEntry Schema(string message) =>
+        new(IssueSeverity.Error, Lang.T("Схема", "Schema"), message);
+
+    /// <summary>Думата отляво — подадената или тази на тежестта.</summary>
+    public string Word => Label.Length > 0
+        ? Label
+        : Severity == IssueSeverity.Error ? Lang.T("Грешка", "Error") : Lang.T("Бележка", "Note");
 }
 
 /// <summary>
@@ -23,6 +42,9 @@ internal sealed record IssueEntry(IssueSeverity Severity, string Location, strin
 /// </summary>
 internal sealed class IssueList : ListBox
 {
+    /// <summary>Колко място взема думата отляво — мери се по най-дългата.</summary>
+    private int _wordWidth = Theme.Scaled(70);
+
     public IssueList()
     {
         DrawMode = DrawMode.OwnerDrawFixed;
@@ -39,10 +61,18 @@ internal sealed class IssueList : ListBox
 
     public void Fill(IEnumerable<IssueEntry> entries)
     {
+        var list = entries.ToList();
+
+        // По най-дългата дума, но не по-тясно от досегашното: „Грешка“ и
+        // „Бележка“ се побираха в седемдесет, „Спира отчета“ — не.
+        _wordWidth = Math.Max(Theme.Scaled(70), list.Count == 0
+            ? 0
+            : list.Max(e => TextRenderer.MeasureText(e.Word, Theme.SmallBold).Width) + Theme.Scaled(6));
+
         BeginUpdate();
         Items.Clear();
 
-        foreach (var entry in entries) Items.Add(entry);
+        foreach (var entry in list) Items.Add(entry);
 
         EndUpdate();
     }
@@ -71,14 +101,18 @@ internal sealed class IssueList : ListBox
         var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix |
                     TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine;
 
-        TextRenderer.DrawText(g, error ? "Грешка" : "Бележка", Theme.SmallBold,
-            new Rectangle(bounds.Left + Theme.Scaled(18), bounds.Top, Theme.Scaled(70), bounds.Height), accent, flags);
+        var word = bounds.Left + Theme.Scaled(18);
+        var place = word + _wordWidth + Theme.Scaled(6);
+        var message = place + Theme.Scaled(198);
+
+        TextRenderer.DrawText(g, entry.Word, Theme.SmallBold,
+            new Rectangle(word, bounds.Top, _wordWidth, bounds.Height), accent, flags);
 
         TextRenderer.DrawText(g, entry.Location, Theme.Small,
-            new Rectangle(bounds.Left + Theme.Scaled(94), bounds.Top, Theme.Scaled(190), bounds.Height), Theme.InkFaint, flags);
+            new Rectangle(place, bounds.Top, Theme.Scaled(190), bounds.Height), Theme.InkFaint, flags);
 
         TextRenderer.DrawText(g, entry.Message, Theme.Base,
-            new Rectangle(bounds.Left + Theme.Scaled(292), bounds.Top, bounds.Width - Theme.Scaled(300), bounds.Height),
+            new Rectangle(message, bounds.Top, bounds.Width - (message - bounds.Left) - Theme.Scaled(8), bounds.Height),
             selected ? Theme.Ink : Theme.InkStrong, flags);
     }
 }

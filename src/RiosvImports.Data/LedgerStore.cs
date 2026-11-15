@@ -207,6 +207,29 @@ public sealed class LedgerStore(SqliteConnection connection)
         return parties;
     }
 
+    /// <summary>
+    /// Бележките на всички движения наведнъж — само непразните.
+    ///
+    /// „Месец“ ги показва в стълб, а питани по едно на ред, петстотинте приемания
+    /// на един истински месец бяха петстотин заявки при всяко щракване по ситото.
+    /// </summary>
+    public Dictionary<long, string> Notes(long companyId, string? stagenum = null)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText =
+            "SELECT id, note FROM ledger_moves " +
+            "WHERE company_id = $company AND note <> '' AND ($stage IS NULL OR stagenum = $stage);";
+
+        Scope(command, companyId, stagenum);
+
+        var notes = new Dictionary<long, string>();
+        using var reader = command.ExecuteReader();
+
+        while (reader.Read()) notes[reader.GetInt64(0)] = reader.GetString(1);
+
+        return notes;
+    }
+
     public string Note(long moveId)
     {
         using var command = _connection.CreateCommand();

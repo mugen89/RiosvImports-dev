@@ -11,6 +11,25 @@ using RiosvImports.Data;
 namespace RiosvImports.App.Shell;
 
 /// <summary>
+/// Откъде е отворена таблицата — от това зависи дали се внася файл.
+///
+/// Файл се внася само от „Склад“ → „Внеси…“. Дотук същото внасяне стоеше и в
+/// „Месец“, и тестващите питаха кое от двете е правилното — а два пътя до едно
+/// внасяне са и два начина един файл да се внесе два пъти.
+/// </summary>
+internal enum SheetImport
+{
+    /// <summary>Без внасяне от файл — „Месец“: там се пише и се залепва.</summary>
+    None,
+
+    /// <summary>„Внеси…“ стои в лентата, ако движението е отключено за внасяне.</summary>
+    Offered,
+
+    /// <summary>Отваря направо менюто за внасяне — „Склад“ → „Внеси…“.</summary>
+    Start
+}
+
+/// <summary>
 /// Въвеждане на цял месец наведнъж — в таблица.
 ///
 /// Прозорчето за един ред е добро за един ред. Приемането обаче не идва по
@@ -71,12 +90,16 @@ internal sealed class MoveSheetDialog : Dialog
     /// <summary>Файловете, внесени в тази таблица — по белега, който носят редовете им.</summary>
     private readonly Dictionary<string, (string Source, string Path)> _files = new(StringComparer.Ordinal);
 
+    /// <summary>Внася ли се файл оттук — само когато таблицата е отворена от склада.</summary>
+    private readonly SheetImport _import;
+
     /// <summary>
-    /// <paramref name="startWithImport"/> отваря направо менюто за внасяне.
+    /// <paramref name="import"/> казва дали оттук се внася файл.
     ///
-    /// Ползва се от „Склад“: там човек е натиснал „Внеси…“ и таблицата е
-    /// стъпката по пътя, а не целта. Празна таблица с едно скрито меню е точно
-    /// толкова далеч от файла, колкото и преди.
+    /// <see cref="SheetImport.Start"/> отваря направо менюто за внасяне. Ползва се
+    /// от „Склад“: там човек е натиснал „Внеси…“ и таблицата е стъпката по пътя, а
+    /// не целта. Празна таблица с едно скрито меню е точно толкова далеч от файла,
+    /// колкото и преди.
     /// </summary>
     public MoveSheetDialog(
         ImportService service,
@@ -85,13 +108,14 @@ internal sealed class MoveSheetDialog : Dialog
         string stagenum,
         MoveKind kind,
         LedgerPeriod period,
-        bool startWithImport = false)
+        SheetImport import = SheetImport.None)
     {
         _workspace = workspace;
         _companyId = companyId;
         _stagenum = stagenum;
         _kind = kind;
         _period = period;
+        _import = import;
 
         var schema = service.GetSchema("book");
         var report = schema.FindReport(BookNodes.Report);
@@ -159,11 +183,14 @@ internal sealed class MoveSheetDialog : Dialog
 
         // След показването, а не в конструктора: меню, отворено върху прозорец,
         // който още го няма, се появява на чужд екран.
-        if (startWithImport && _importButton is not null) Shown += (_, _) => ImportMenu();
+        if (import == SheetImport.Start && _importButton is not null) Shown += (_, _) => ImportMenu();
     }
 
     /// <summary>Дали нещо е записано — страницата се обновява само тогава.</summary>
     public bool Saved { get; private set; }
+
+    /// <summary>Защо записът е спрян — празно, ако не е.</summary>
+    internal string Refusal { get; private set; } = string.Empty;
 
     /// <summary>
     /// Служебните колони на таблицата.
@@ -329,12 +356,18 @@ internal sealed class MoveSheetDialog : Dialog
         // Копчето се маха, а не се угасява: угасено копче кара човека да търси
         // какво му липсва, за да го включи. Тук липсва решение, а то се взима на
         // друг екран — и надписът отдолу казва къде.
-        if (_workspace.Periods.CanImport(_companyId, _kind))
+        if (_import != SheetImport.None && _workspace.Periods.CanImport(_companyId, _kind))
         {
             _importButton = Action(Lang.T("Внеси…", "Import…"), Theme.Glyph.Import, ImportMenu);
             sources.Controls.Add(_importButton);
         }
         sources.Controls.Add(Action(Lang.T("Изнеси…", "Export…"), Theme.Glyph.Excel, () => Export()));
+
+        // Без внасяне оттук се казва къде е: копче, което го няма, иначе се търси.
+        if (_import == SheetImport.None && _workspace.Periods.CanImport(_companyId, _kind))
+            _hint.Text = Lang.T(
+                "Файл от „Деметра“ или от наш шаблон се внася от „Склад“ → „Внеси…“.",
+                "A Demetra file or one of our templates is imported from “Store” → “Import…”.");
 
         _hint.Dock = DockStyle.Fill;
         _hint.AutoSize = false;
@@ -462,11 +495,31 @@ internal sealed class MoveSheetDialog : Dialog
 
         var kept = parsed.Select(p => p.Request.MoveId).OfType<long>().ToHashSet();
 
+        var gone = _workspace.Ledger.Read(_companyId, _stagenum)
+            .Where(m => m.Kind == _kind && !m.Opening && _period.Covers(m.Date))
+            .Where(m => !kept.Contains(m.Id))
+            .ToList();
+
+        // Махнатият ред, от който вече е черпено, спира записа — както в
+        // дневника и при Delete в „Месец“ (дефект 9). Иначе едни и същи тонове
+        // остават в два склада, а таблицата казва „записано“.
+        if (gone.Count > 0 &&
+            LedgerPage.Refused(
+                _workspace.Ledger.Read(_companyId, _stagenum),
+                _workspace.Ledger.Links(_companyId, _stagenum),
+                [.. gone.Select(m => m.Id)]) is { } why)
+        {
+            Refusal = why;
+
+            if (Visible)
+                MessageBox.Show(this, why, Lang.T("От него вече е взето", "It has already been drawn on"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+            return;
+        }
+
         // Махнатите от таблицата си отиват и от склада.
-        foreach (var move in _workspace.Ledger.Read(_companyId, _stagenum)
-                     .Where(m => m.Kind == _kind && !m.Opening && _period.Covers(m.Date))
-                     .Where(m => !kept.Contains(m.Id))
-                     .ToList())
+        foreach (var move in gone)
             _workspace.Writer.Remove(_companyId, move.Id);
 
         // Кой файл какво е родил — събира се при самия запис, защото само тук се
@@ -691,7 +744,21 @@ internal sealed class MoveSheetDialog : Dialog
 
         try
         {
-            var added = LoadTemplate(path, out var problems);
+            // Excel файлът се чете секунда-две: часовникът казва, че нещо става,
+            // вместо прозорецът да изглежда замръзнал.
+            UseWaitCursor = true;
+
+            int added;
+            IReadOnlyList<string> problems;
+
+            try
+            {
+                added = LoadTemplate(path, out problems);
+            }
+            finally
+            {
+                UseWaitCursor = false;
+            }
 
             Say(problems.Count > 0
                 ? string.Join(" ", problems.Take(2))
@@ -860,14 +927,27 @@ internal sealed class MoveSheetDialog : Dialog
     {
         if (_grid is null) return new Loaded(0, 0, 0, []);
 
-        var file = DemetraWorkbook.Read(path);
+        ImportOutcome outcome;
 
-        var plan = new ImportPlan(
-            DemetraWorkbook.SuggestedKinds,
-            file.Sites.ToDictionary(site => site, _ => _stagenum, StringComparer.OrdinalIgnoreCase),
-            DemetraWorkbook.SuggestedDirect);
+        // Четенето на чуждия дневник е бавната част — часовникът стои до
+        // прегледа, но не и в него: там човек работи.
+        UseWaitCursor = true;
 
-        var outcome = LedgerImport.Apply(file, plan);
+        try
+        {
+            var file = DemetraWorkbook.Read(path);
+
+            var plan = new ImportPlan(
+                DemetraWorkbook.SuggestedKinds,
+                file.Sites.ToDictionary(site => site, _ => _stagenum, StringComparer.OrdinalIgnoreCase),
+                DemetraWorkbook.SuggestedDirect);
+
+            outcome = LedgerImport.Apply(file, plan);
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
 
         // ПРЕГЛЕД ПРЕДИ ВЛИЗАНЕ.
         //
@@ -1011,6 +1091,12 @@ internal sealed class MoveSheetDialog : Dialog
     // ------------------------------------------------------------- за теста
 
     internal SheetGrid? Grid => _grid;
+
+    /// <summary>Има ли копче „Внеси…“ — само когато таблицата е отворена от склада.</summary>
+    internal bool ImportOffered => _importButton is not null;
+
+    /// <summary>Какво казва долният ред — пътят до внасянето, когато го няма тук.</summary>
+    internal string HintText => _hint.Text;
 
     internal int RowCount => _grid?.DataRowCount ?? 0;
 

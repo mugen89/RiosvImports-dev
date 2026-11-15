@@ -123,7 +123,7 @@ internal sealed class ShellForm : Form
         // всяка поддръжка, а заглавната лента се вижда и на снимка на екрана.
         var title = $"RIOSV Imports {Updates.CurrentVersion}";
 
-        Text = workspace.Path == Workspace.DefaultPath()
+        Text = AppServices.IsOwn(workspace)
             ? title
             : title + Lang.T(" — пробна база", " — test database");
         Font = Theme.Base;
@@ -271,15 +271,27 @@ internal sealed class ShellForm : Form
         _home.NoticesChanged += (_, _) => UpdateBadges();
         _settings.CheckRequested += (_, _) => CheckOnline();
         _settings.RestartRequested += (_, _) => RestartToUpdate();
-        _work.DocumentsChanged += (_, _) => { _home.Refresh(); _balance.Refresh(); UpdateBadges(); };
+
+        // Пресмята се само страницата пред очите. Скритите се пресмятат така или
+        // иначе при показване (Show) — а пресметнати и сега, те бяха по една
+        // секунда чакане след всяко „Записване“ в склада при истински месец.
+        _work.DocumentsChanged += (_, _) => { Touch(_home, _balance); UpdateBadges(); };
 
         // Съставеният от склада отчет е нов отчет: списъкът и таблото трябва
         // да го видят, без да се чака превключване на страници.
-        _ledger.DocumentsChanged += (_, _) => { _work.Reload(); _home.Refresh(); UpdateBadges(); };
+        _ledger.DocumentsChanged += (_, _) => { Touch(_work, _home); UpdateBadges(); };
 
         // Третирането от склада е движение като всяко друго: „Месец“ трябва да
         // го види веднага, а не при следващото превключване.
-        _stock.LedgerChanged += (_, _) => _ledger.Refresh();
+        _stock.LedgerChanged += (_, _) => Touch(_ledger);
+
+        // Проверката на месеца води до склада, в който се образува — към края
+        // на месеца, в който чака.
+        _ledger.StoreRequested += (_, request) =>
+        {
+            Show(_stock);
+            _stock.Open(request.Store, request.On);
+        };
 
         // Махнатото внасяне отнася наведнъж движения, партиди и отчети — тоест
         // почти всичко, което другите страници показват. Затова се обновяват
@@ -291,11 +303,7 @@ internal sealed class ShellForm : Form
             _scope.Reload();
             FillScope();
 
-            _work.Reload();
-            _ledger.Refresh();
-            _stock.Refresh();
-            _balance.Refresh();
-            _home.Refresh();
+            Touch(_work, _ledger, _stock, _balance, _home);
             UpdateBadges();
         };
 
@@ -777,6 +785,13 @@ internal sealed class ShellForm : Form
             return true;
         }
 
+        // Търсенето на видимия екран — откъдето и да е курсорът. Страница без
+        // търсене („Начало“, „Баланс“) не поема клавиша.
+        if (keys == (Keys.Control | Keys.F) &&
+            _pages.FirstOrDefault(entry => entry.Button.Active).Page is ContentPage { } page &&
+            page.FocusSearch())
+            return true;
+
         // Списъкът с клавишите се отваряше само от редактора, а сега в него
         // има и клавиши, които важат тук.
         if (keys == (Keys.Control | Keys.F1))
@@ -891,6 +906,33 @@ internal sealed class ShellForm : Form
 
     /// <summary>Ширината на лентата отляво — ползва се от тестовете.</summary>
     internal int RailWidth => _rail.Width;
+
+    /// <summary>
+    /// Казва на страниците, че данните зад тях са се сменили.
+    ///
+    /// Пресмята се само видимата. Останалите се пресмятат при показване — Show
+    /// го прави за всяка — и пресмятането им сега е чакане, което никой не вижда.
+    /// Видима е тази, чийто бутон е избран, а не тази с Visible: в непоказан
+    /// прозорец Visible е „не“ за всичко (виж капаните).
+    /// </summary>
+    private void Touch(params Control[] pages)
+    {
+        var active = _pages.FirstOrDefault(entry => entry.Button.Active).Page;
+
+        foreach (var page in pages)
+        {
+            if (!ReferenceEquals(page, active)) continue;
+
+            switch (page)
+            {
+                case HomePage home: home.Refresh(); break;
+                case WorkPage work: work.Reload(); break;
+                case BalancePage balance: balance.Refresh(); break;
+                case LedgerPage ledger: ledger.Refresh(); break;
+                case StockPage stock: stock.Refresh(); break;
+            }
+        }
+    }
 
     private void Show(Control page)
     {

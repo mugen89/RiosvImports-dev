@@ -21,7 +21,14 @@ internal static class Program
         // издание се слага само с копче („Рестартирай и обнови“) — отчетите се
         // подават срещу срок и програмата не бива да се смени сама сутринта, в
         // която човек сяда да подава.
-        VelopackApp.Build().SetAutoApplyOnStartup(false).Run();
+        //
+        // Преди деинсталиране работата се пренася в профила: Velopack трие цялата
+        // папка на програмата, а от 1.3.1 базата стои в нея („Data“). Оттам тя се
+        // връща сама при следващо инсталиране (DataLocation.Adopt).
+        VelopackApp.Build()
+            .SetAutoApplyOnStartup(false)
+            .OnBeforeUninstallFastCallback(_ => DataLocation.Rescue(DataLocation.Folder, DataLocation.ProfileFolder))
+            .Run();
 
         // Българска локализация на диалозите и форматите в интерфейса.
         var culture = new CultureInfo("bg-BG");
@@ -149,7 +156,7 @@ internal static class Program
     internal const string CrashLogVariable = "RIOSV_ERROR_LOG";
 
     /// <summary>
-    /// Дневникът на грешките — до базата, в профила на потребителя.
+    /// Дневникът на грешките — до базата, в папка „Data“ до програмата.
     ///
     /// Тестовете го пренасочват (<see cref="CrashLogVariable"/>): проверката, че
     /// неуспялото обновяване се записва, иначе пишеше в истинския дневник на
@@ -158,10 +165,7 @@ internal static class Program
     internal static string CrashLogPath =>
         Environment.GetEnvironmentVariable(CrashLogVariable) is { Length: > 0 } custom
             ? custom
-            : Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "RIOSV Imports",
-                "error.log");
+            : Path.Combine(DataLocation.Folder, "error.log");
 
     /// <summary>Записва подробностите за грешката, за да може да се разчете после.</summary>
     internal static string? WriteCrashLog(Exception? ex)

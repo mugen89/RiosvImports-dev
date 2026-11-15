@@ -165,6 +165,8 @@ internal sealed class BatchDialog : Dialog
 
         _steps.ColumnHeadersDefaultCellStyle.BackColor = Theme.Surface;
         _steps.ColumnHeadersDefaultCellStyle.ForeColor = Theme.InkStrong;
+        _steps.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.Surface;
+        _steps.ColumnHeadersDefaultCellStyle.SelectionForeColor = Theme.InkStrong;
         _steps.ColumnHeadersDefaultCellStyle.Font = Theme.Bold;
         _steps.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 6, 6, 6);
         _steps.DefaultCellStyle.BackColor = Theme.Canvas;

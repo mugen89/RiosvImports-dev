@@ -312,6 +312,8 @@ internal sealed class PartialDialog : Dialog
 
         _grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.Surface;
         _grid.ColumnHeadersDefaultCellStyle.ForeColor = Theme.InkStrong;
+        _grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.Surface;
+        _grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Theme.InkStrong;
         _grid.ColumnHeadersDefaultCellStyle.Font = Theme.Bold;
         _grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 6, 6, 6);
 

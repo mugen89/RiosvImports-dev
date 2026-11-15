@@ -273,6 +273,8 @@ internal sealed class ImportPreviewDialog : Dialog
 
         _grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.Surface;
         _grid.ColumnHeadersDefaultCellStyle.ForeColor = Theme.InkStrong;
+        _grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.Surface;
+        _grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Theme.InkStrong;
         _grid.ColumnHeadersDefaultCellStyle.Font = Theme.Bold;
         _grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 6, 6, 6);
 
@@ -418,38 +420,70 @@ internal sealed class ImportPreviewDialog : Dialog
         return _down ? order.Reverse() : order;
     }
 
+    /// <summary>
+    /// Задрасканият шрифт — един за всички махнати редове.
+    ///
+    /// Дотук всеки махнат ред получаваше свой нов шрифт при всяко пълнене, а
+    /// таблицата се пълни наново при всеки знак в търсенето: стотици шрифтове,
+    /// които никой не освобождава.
+    /// </summary>
+    private readonly Font _struck = new(Theme.Base, FontStyle.Strikeout);
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _struck.Dispose();
+
+        base.Dispose(disposing);
+    }
+
     private void Fill()
     {
-        _grid.Rows.Clear();
+        // Наведнъж, а не ред по ред: юлският износ е петстотин и осемдесет реда и
+        // таблицата се пълни наново при всяко търсене и подреждане. Номерата на
+        // стълбовете се вземат веднъж: ред, още невързан за таблицата, не познава
+        // клетките си по име.
+        int At(string column) => _grid.Columns[column]!.Index;
+
+        var (line, kind, date, code, amount, partner, document, site) =
+            (At(LineColumn), At(KindColumn), At(DateColumn), At(CodeColumn),
+             At(AmountColumn), At(PartnerColumn), At(DocumentColumn), At(SiteColumn));
+
+        var rows = new List<DataGridViewRow>();
 
         foreach (var move in Arrange(Shown()))
         {
-            var index = _grid.Rows.Add();
-            var row = _grid.Rows[index];
+            var row = (DataGridViewRow)_grid.RowTemplate.Clone();
 
-            row.Cells[LineColumn].Value = move.Line.ToString();
-            row.Cells[KindColumn].Value = Moves.Title(move.Kind);
-            row.Cells[DateColumn].Value = move.Date.ToString(ValueConverter.BulgarianDateFormat);
-            row.Cells[CodeColumn].Value = move.Ewc;
-            row.Cells[AmountColumn].Value = SplitMath.Amount(move.Amount);
+            row.CreateCells(_grid);
 
-            row.Cells[PartnerColumn].Value = move.Partner.Length > 0 && move.Eik.Length > 0
+            row.Cells[line].Value = move.Line.ToString();
+            row.Cells[kind].Value = Moves.Title(move.Kind);
+            row.Cells[date].Value = move.Date.ToString(ValueConverter.BulgarianDateFormat);
+            row.Cells[code].Value = move.Ewc;
+            row.Cells[amount].Value = SplitMath.Amount(move.Amount);
+
+            row.Cells[partner].Value = move.Partner.Length > 0 && move.Eik.Length > 0
                 ? $"{move.Partner} — {move.Eik}"
                 : move.Partner.Length > 0 ? move.Partner : move.Eik;
 
-            row.Cells[DocumentColumn].Value = move.Document;
-            row.Cells[SiteColumn].Value = move.Stagenum;
+            row.Cells[document].Value = move.Document;
+            row.Cells[site].Value = move.Stagenum;
 
             // Махнатото не изчезва от списъка: то се задрасква. Изчезнал ред не
             // може да бъде върнат, а и не се вижда, че изобщо го е имало.
             if (_dropped.Contains(move.Line))
             {
                 row.DefaultCellStyle.ForeColor = Theme.InkFaint;
-                row.DefaultCellStyle.Font = new Font(Theme.Base, FontStyle.Strikeout);
+                row.DefaultCellStyle.Font = _struck;
             }
 
             row.Tag = move;
+
+            rows.Add(row);
         }
+
+        _grid.Rows.Clear();
+        _grid.Rows.AddRange([.. rows]);
 
         Glyph();
         Weigh();

@@ -28,6 +28,7 @@ internal sealed class ShortcutsDialog : Dialog
         (Lang.T("Главният прозорец", "The main window"), "Ctrl+Q", Lang.T("Свива и отваря лентата отляво — с лявата ръка, без мишката", "Collapses and opens the left rail — left hand only, no mouse")),
         (Lang.T("Главният прозорец", "The main window"), "Ctrl+1 … Ctrl+8", Lang.T("Поредният екран от лентата: Ctrl+1 — „Начало“, Ctrl+2 — „Месец“, Ctrl+3 — „Склад“…", "The screen at that place in the rail: Ctrl+1 — “Home”, Ctrl+2 — “Month”, Ctrl+3 — “Store”…")),
         (Lang.T("Главният прозорец", "The main window"), "F6", Lang.T("В „Баланс“: свива и отваря панела с настройките отдясно", "In “Balance”: collapses and opens the settings panel on the right")),
+        (Lang.T("Главният прозорец", "The main window"), "Ctrl+F", Lang.T("Търсенето на екрана: „Месец“, „Склад“, „Отчети“, „Списъци“", "The screen's search: “Month”, “Store”, “Reports”, “Lists”")),
         (Lang.T("Главният прозорец", "The main window"), "Ctrl+PageUp", Lang.T("В „Месец“: предишният месец", "In “Month”: the previous month")),
         (Lang.T("Главният прозорец", "The main window"), "Ctrl+PageDown", Lang.T("В „Месец“: следващият месец", "In “Month”: the next month")),
         (Lang.T("Главният прозорец", "The main window"), "F4", Lang.T("В „Третиране от склада“: отваря календара за датата", "In “Treatment from the store”: opens the date calendar")),

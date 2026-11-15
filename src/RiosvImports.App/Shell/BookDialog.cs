@@ -6,6 +6,27 @@ using RiosvImports.Core.Values;
 namespace RiosvImports.App.Shell;
 
 /// <summary>
+/// Какво ще влезе в отчета за един период — и какво би го спряло.
+///
+/// <paramref name="Waiting"/> са месеците, в чийто край нещо чака в „Третиран“:
+/// само те спират съставянето. <paramref name="Problems"/> са най-честите грешки,
+/// които проверката по схемата ще намери в съставения отчет — те не спират, но
+/// казани тук, се поправят в „Месец“, преди отчетът да съществува, а не в него.
+/// </summary>
+internal sealed record BookWeight(
+    int Rows,
+    int Missing,
+    IReadOnlyList<WaitingMonth> Waiting,
+    IReadOnlyList<string> Problems,
+    int ProblemCount)
+{
+    /// <summary>Дали съставянето е спряно.</summary>
+    public bool Blocked => Waiting.Count > 0;
+
+    public static BookWeight Empty => new(0, 0, [], [], 0);
+}
+
+/// <summary>
 /// Какъв период да покрие съставеният отчет.
 ///
 /// Изборът е между месеца, който се гледа, и тримесечието, в което той пада.
@@ -15,25 +36,35 @@ namespace RiosvImports.App.Shell;
 ///
 /// Затова по подразбиране е тримесечието: то е това, което накрая тръгва
 /// нанякъде.
+///
+/// Когато отчет не може да се състави, прозорецът казва ЗАЩО — в кой месец,
+/// колко и кои купчини, и къде се поправя — и копчето „Състави“ угасва. Дотук
+/// копчето работеше и чак след натискането излизаше съобщение, а самият
+/// прозорец казваше само „чакат 1,250 т“, без месец.
 /// </summary>
 internal sealed class BookDialog : Dialog
 {
     private readonly SegmentedControl _scope = new();
     private readonly Label _preview = new();
     private readonly LedgerPeriod _period;
-    private readonly Func<LedgerPeriod, LedgerPeriod, (int Rows, int Missing, decimal Waiting)> _count;
+    private readonly Func<LedgerPeriod, LedgerPeriod, BookWeight> _weigh;
 
-    public BookDialog(
-        LedgerPeriod period,
-        Func<LedgerPeriod, LedgerPeriod, (int Rows, int Missing, decimal Waiting)> count)
+    /// <summary>Претегленото по период: превключването напред-назад не смята наново.</summary>
+    private readonly Dictionary<(LedgerPeriod, LedgerPeriod), BookWeight> _weighed = [];
+
+    private AppButton? _create;
+
+    public BookDialog(LedgerPeriod period, Func<LedgerPeriod, LedgerPeriod, BookWeight> weigh)
     {
         _period = period;
-        _count = count;
+        _weigh = weigh;
 
         Text = Lang.T("Съставяне на отчет", "Compose a report");
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
-        ClientSize = new Size(Theme.Scaled(560), Theme.Scaled(300));
+        // По-висок от преди: прозорецът казва и защо не излиза, и какво ще намери
+        // проверката. На 1366×700 четирите реда грешки не се побираха в 460.
+        ClientSize = new Size(Theme.Scaled(720), Theme.Scaled(500));
         BackColor = Theme.Canvas;
         Font = Theme.Base;
 
@@ -41,7 +72,13 @@ internal sealed class BookDialog : Dialog
         Controls.Add(BuildButtons());
         Controls.Add(BuildTitle());
 
+        // Тримесечието по подразбиране — освен ако то е спряно, а месецът не:
+        // тогава се отваря онова, което може да излезе, и се казва защо.
         _scope.SelectedIndex = 1;
+
+        if (Weight(Quarter().From, Quarter().To).Blocked && !Weight(_period, _period).Blocked)
+            _scope.SelectedIndex = 0;
+
         Describe();
 
         Theme.Apply(this);
@@ -58,6 +95,30 @@ internal sealed class BookDialog : Dialog
         var first = (_period.Quarter - 1) * 3 + 1;
 
         return (new LedgerPeriod(_period.Year, first), new LedgerPeriod(_period.Year, first + 2));
+    }
+
+    private BookWeight Weight(LedgerPeriod from, LedgerPeriod to)
+    {
+        if (_weighed.TryGetValue((from, to), out var known)) return known;
+
+        BookWeight weight;
+
+        try
+        {
+            weight = _weigh(from, to);
+        }
+        catch (Exception ex)
+        {
+            weight = BookWeight.Empty with
+            {
+                Problems = [Lang.T("Проверката не можа да мине: ", "The check could not run: ") + ex.Message],
+                ProblemCount = 1
+            };
+        }
+
+        _weighed[(from, to)] = weight;
+
+        return weight;
     }
 
     private Control BuildTitle()
@@ -135,7 +196,11 @@ internal sealed class BookDialog : Dialog
         var create = Theme.PrimaryButton(Lang.T("Състави", "Compose"));
         create.Height = buttonHeight;
         create.Margin = Padding.Empty;
-        create.Click += (_, _) => DialogResult = DialogResult.OK;
+        create.Click += (_, _) =>
+        {
+            if (!Weight(From, To).Blocked) DialogResult = DialogResult.OK;
+        };
+        _create = create;
 
         var cancel = Theme.GhostButton(Lang.T("Отказ", "Cancel"));
         cancel.Height = buttonHeight;
@@ -161,7 +226,7 @@ internal sealed class BookDialog : Dialog
     /// </summary>
     private void Describe()
     {
-        var (rows, missing, waiting) = _count(From, To);
+        var weight = Weight(From, To);
 
         var period = From == To
             ? From.Title()
@@ -169,36 +234,71 @@ internal sealed class BookDialog : Dialog
 
         var text = Lang.T(
             $"Период: {period}{Environment.NewLine}" +
-            $"Движения за подаване: {rows}",
+            $"Движения за подаване: {weight.Rows}",
             $"Period: {period}{Environment.NewLine}" +
-            $"Movements to submit: {rows}");
+            $"Movements to submit: {weight.Rows}");
 
-        if (rows == 0)
-            text += Environment.NewLine + Environment.NewLine + Lang.T(
+        var gap = Environment.NewLine + Environment.NewLine;
+
+        if (weight.Blocked)
+        {
+            // Чакащото в склад „Третиран“ спира съставянето, а не само го
+            // отбелязва: отчет, който твърди, че отпадъкът е минал през
+            // площадката, докато той още стои на нея, е неверен отчет.
+            text += gap + Lang.T(
+                "Отчет не може да се състави — в склад „Третиран“ чака количество:",
+                "No report can be composed — a quantity waits in the “Treated” store:");
+
+            foreach (var month in weight.Waiting)
+                text += Environment.NewLine + Lang.T(
+                    $"· {month.Month.Title()} — {SplitMath.Amount(month.Amount)} т: {month.Named(2)}",
+                    $"· {month.Month.Title()} — {SplitMath.Amount(month.Amount)} t: {month.Named(2)}");
+
+            text += gap + new LedgerIssue(LedgerProblem.Waiting, string.Empty, 0m).Fix;
+
+            // Тримесечието е спряно, а месецът — не: това е изходът, и той се казва.
+            if (From != To && !Weight(_period, _period).Blocked)
+                text += gap + Lang.T(
+                    $"Отчет само за {_period.Title()} може да се състави — изберете го горе.",
+                    $"A report for {_period.Title()} alone can be composed — pick it above.");
+        }
+        else if (weight.Rows == 0)
+        {
+            text += gap + Lang.T(
                 "През този период няма движения. Съставеният отчет ще е празен.",
                 "There are no movements in this period. The composed report will be empty.");
-        else if (missing > 0)
-            text += Environment.NewLine + Environment.NewLine + Lang.T(
-                $"{missing} от тях са без посочен произход. Отчетът ще мине, но за тези " +
-                "количества складът няма да може да каже от кого са.",
-                $"{missing} of them have no stated origin. The report will pass, but the store " +
-                "will not be able to say who those quantities came from.");
+        }
+        else
+        {
+            if (weight.Missing > 0)
+                text += gap + Lang.T(
+                    $"{weight.Missing} от тях са без посочен произход. Отчетът ще мине, но за тези " +
+                    "количества складът няма да може да каже от кого са.",
+                    $"{weight.Missing} of them have no stated origin. The report will pass, but the store " +
+                    "will not be able to say who those quantities came from.");
 
-        // Чакащото в склад „Третиран“ спира съставянето, а не само го отбелязва:
-        // отчет, който твърди, че отпадъкът е минал през площадката, докато той
-        // още стои на нея, е неверен отчет.
-        if (waiting > 0)
-            text += Environment.NewLine + Environment.NewLine + Lang.T(
-                $"В склад „Третиран“ чакат {SplitMath.Amount(waiting)} т. Отчет не може да се " +
-                "състави, докато не се обяви какво е образувано от тях.",
-                $"{SplitMath.Amount(waiting)} t are waiting in the “Treated” store. No report can be " +
-                "composed until it is stated what was generated from them.");
+            // Грешките по схемата не спират съставянето — отчетът се поправя и в
+            // редактора. Казани тук, те се поправят при източника, в „Месец“, и
+            // не се връщат при следващото съставяне.
+            if (weight.ProblemCount > 0)
+            {
+                text += gap + Lang.T(
+                    $"Проверката по схемата ще намери {weight.ProblemCount} грешки. Отчетът се съставя, " +
+                    "но не става файл, докато не се поправят:",
+                    $"The schema check will find {weight.ProblemCount} errors. The report is composed, " +
+                    "but cannot become a file until they are fixed:");
+
+                foreach (var problem in weight.Problems) text += Environment.NewLine + "· " + problem;
+            }
+        }
 
         _preview.Text = text;
 
-        _preview.ForeColor = waiting > 0
+        _preview.ForeColor = weight.Blocked
             ? Theme.Error
-            : missing > 0 && rows > 0 ? Theme.Warn : Theme.InkMuted;
+            : (weight.Missing > 0 || weight.ProblemCount > 0) && weight.Rows > 0 ? Theme.Warn : Theme.InkMuted;
+
+        if (_create is not null) _create.Enabled = !weight.Blocked;
     }
 
     /// <summary>Заглавието, което съставеният отчет получава.</summary>
@@ -214,4 +314,21 @@ internal sealed class BookDialog : Dialog
     public string PeriodStart => From.First.ToString(ValueConverter.BulgarianDateFormat);
 
     public string PeriodEnd => To.Last.ToString(ValueConverter.BulgarianDateFormat);
+
+    // ------------------------------------------------------------- за теста
+
+    /// <summary>Какво казва прозорецът за избрания период.</summary>
+    internal string PreviewText => _preview.Text;
+
+    /// <summary>Може ли да се натисне „Състави“.</summary>
+    internal bool ComposeOffered => _create?.Enabled ?? false;
+
+    /// <summary>0 — месецът, 1 — тримесечието.</summary>
+    internal int ScopeIndex => _scope.SelectedIndex;
+
+    internal void UseScope(int index)
+    {
+        _scope.SelectedIndex = index;
+        Describe();
+    }
 }

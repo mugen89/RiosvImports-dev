@@ -70,6 +70,12 @@ internal sealed class SettingsPage : ContentPage
     private readonly CheckBox _prerelease = new();
     private readonly Label _supportSays = new();
 
+    /// <summary>Под пътя до базата: какво е това място и какво става с него.</summary>
+    private readonly Label _databaseSays = new();
+
+    /// <summary>Какво прави изчистването — и после какво е станало.</summary>
+    private readonly Label _testingSays = new();
+
     private AppButton _checkNow = null!;
     private AppButton _updateNow = null!;
 
@@ -115,7 +121,8 @@ internal sealed class SettingsPage : ContentPage
             (Lang.T("Профил", "Account"), BuildAccount()),
             (Lang.T("Обновяване", "Updates"), BuildUpdates()),
             (Lang.T("База", "Database"), BuildDatabase()),
-            (Lang.T("Поддръжка", "Support"), BuildSupport())
+            (Lang.T("Поддръжка", "Support"), BuildSupport()),
+            (Lang.T("За тестване", "For testing"), BuildTesting())
         ];
 
         _stack.Controls.Add(BuildJumps(frames));
@@ -780,12 +787,19 @@ internal sealed class SettingsPage : ContentPage
     private Control BuildDatabase()
     {
         var card = Frame(Lang.T("Къде се пази работата", "Where your work is kept"), out var body);
-        card.Height = Theme.Scaled(150);
+        card.Height = Theme.Scaled(196);
 
         _database.Dock = DockStyle.Top;
         _database.Height = Theme.Scaled(28);
         _database.Font = Theme.Mono;
         _database.ForeColor = Theme.InkFaint;
+        _database.AutoEllipsis = true;
+
+        _databaseSays.Dock = DockStyle.Top;
+        _databaseSays.Height = 2 * Theme.Small.Height + Theme.Scaled(8);
+        _databaseSays.Font = Theme.Small;
+        _databaseSays.ForeColor = Theme.InkMuted;
+        _databaseSays.BackColor = Color.Transparent;
 
         var open = Theme.SecondaryButton(Lang.T("Отвори папката", "Open the folder"));
         open.Margin = Padding.Empty;
@@ -818,10 +832,171 @@ internal sealed class SettingsPage : ContentPage
         bar.Controls.Add(imports.FitWidth(24));
         bar.Controls.Add(periods.FitWidth(24));
 
+        // Закачените отгоре се редят наопаки: пътят влиза последен, за да стои горе.
         body.Controls.Add(bar);
+        body.Controls.Add(_databaseSays);
         body.Controls.Add(_database);
 
         return card;
+    }
+
+    /// <summary>
+    /// Какво е мястото на базата — с думи, защото пътят сам не казва.
+    ///
+    /// От 1.3.1 работата стои до програмата и това трябва да се знае: при
+    /// обновяване тя остава, а при деинсталиране се пренася в профила.
+    /// </summary>
+    private string DatabaseText()
+    {
+        if (!AppServices.IsOwn(_workspace))
+            return Lang.T("Отворена е друга база — подадена при пускането („--db“). Работата ви не се пипа.",
+                          "Another database is open — given at start (“--db”). Your own work is not touched.");
+
+        if (!DataLocation.BesideProgram)
+            return Lang.T("До програмата не може да се пише, затова работата стои в профила на потребителя — както преди 1.3.1.",
+                          "The program's folder cannot be written to, so your work stays in your user profile — as before 1.3.1.");
+
+        var moved = AppServices.Adopted == AdoptOutcome.Moved
+            ? Lang.T(" Пренесена е от профила при това пускане; старото копие стои там преименувано.",
+                     " It was moved from your profile on this start; the old copy stays there, renamed.")
+            : string.Empty;
+
+        return Lang.T(
+            $"В папка „{DataLocation.FolderName}“ до програмата. При обновяване остава; при деинсталиране се пренася в профила.",
+            $"In the “{DataLocation.FolderName}” folder next to the program. It stays when updating; uninstalling moves it to your profile.") + moved;
+    }
+
+    // ------------------------------------------------------------- за тестване
+
+    /// <summary>
+    /// Изчистване на склада и на внесеното — за този, който тества.
+    ///
+    /// Тестващият внася един и същ дневник отново и отново и всеки път трябва да
+    /// започне от празен склад. Дотук това значеше да се махне всяко внасяне
+    /// поотделно и после всяко ръчно движение — или да се изтрие базата и да се
+    /// заведат фирмите наново. Резервното копие се прави само, преди всичко.
+    /// </summary>
+    private Control BuildTesting()
+    {
+        var card = Frame(Lang.T("За тестване", "For testing"), out var body);
+        card.Height = Theme.Scaled(178);
+
+        _testingSays.Dock = DockStyle.Top;
+        _testingSays.Height = 3 * Theme.Small.Height + Theme.Scaled(8);
+        _testingSays.Font = Theme.Small;
+        _testingSays.ForeColor = Theme.InkMuted;
+        _testingSays.BackColor = Color.Transparent;
+        _testingSays.Text = TestingText();
+
+        var clear = Theme.DangerButton(Lang.T("Изчисти внасянията и склада…", "Clear imports and stock…"));
+        clear.Margin = Padding.Empty;
+        clear.Height = Theme.Scaled(38);
+        clear.Click += (_, _) => ClearStock();
+
+        var bar = ButtonBar();
+        bar.Controls.Add(clear.FitWidth(24));
+
+        body.Controls.Add(bar);
+        body.Controls.Add(_testingSays);
+
+        return card;
+    }
+
+    private static string TestingText() => Lang.T(
+        "Изтрива за всички фирми движенията, партидите, началните количества, затворените месеци, дневника и " +
+        "списъка с внесените файлове. Фирмите, отчетите, списъците и настройките остават. Преди това се прави " +
+        "резервно копие до базата.",
+        "Deletes, for every company, the movements, batches, opening quantities, closed months, the log and the " +
+        "list of imported files. Companies, reports, lists and settings stay. A backup is made next to the " +
+        "database first.");
+
+    private void ClearStock()
+    {
+        var counts = _workspace.CountStock();
+
+        if (counts.IsEmpty)
+        {
+            MessageBox.Show(this,
+                Lang.T("Складът вече е празен — няма движения, партиди и внесени файлове.",
+                       "The store is already empty — no movements, batches or imported files."),
+                Lang.T("Няма какво да се изчисти", "Nothing to clear"),
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+            return;
+        }
+
+        var nl = Environment.NewLine;
+
+        var question = Lang.T(
+            $"Ще се изтрият за ВСИЧКИ фирми:{nl}{nl}" +
+            $"·  {counts.Moves} движения и {counts.Openings} начални количества{nl}" +
+            $"·  {counts.Batches} партиди{nl}" +
+            $"·  {counts.Imports} внесени файла (следата им — отчетите остават){nl}" +
+            $"·  {counts.Logged} реда от дневника{nl}" +
+            $"·  {counts.Closed} затворени месеца и началото на воденето{nl}{nl}" +
+            $"Остават фирмите, отчетите, списъците и настройките. Преди изчистването се прави резервно копие.{nl}{nl}" +
+            "Да се изчисти ли?",
+            $"This deletes, for EVERY company:{nl}{nl}" +
+            $"·  {counts.Moves} movements and {counts.Openings} opening quantities{nl}" +
+            $"·  {counts.Batches} batches{nl}" +
+            $"·  {counts.Imports} imported files (their trail — the reports stay){nl}" +
+            $"·  {counts.Logged} log rows{nl}" +
+            $"·  {counts.Closed} closed months and the start of the store{nl}{nl}" +
+            $"Companies, reports, lists and settings stay. A backup is made before clearing.{nl}{nl}" +
+            "Clear?");
+
+        // „Не“ е отговорът по подразбиране: Enter не бива да изтрива склада.
+        if (MessageBox.Show(this, question, Lang.T("Изчистване на склада", "Clearing the store"),
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            return;
+
+        string backup;
+
+        try
+        {
+            UseWaitCursor = true;
+            backup = ClearWithBackup();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, Lang.T("Складът не беше изчистен", "The store was not cleared"),
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+            return;
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
+
+        DataChanged?.Invoke(this, EventArgs.Empty);
+
+        _testingSays.Text = Lang.T($"Изчистено. Резервното копие е: {backup}", $"Cleared. The backup is: {backup}");
+        _testingSays.ForeColor = Theme.Ok;
+
+        MessageBox.Show(this,
+            Lang.T($"Складът и внесеното са изчистени.{nl}{nl}Резервното копие е:{nl}{backup}{nl}{nl}" +
+                   "За да се върне: затворете програмата и сложете копието на мястото на workspace.db.",
+                   $"The store and the imports are cleared.{nl}{nl}The backup is:{nl}{backup}{nl}{nl}" +
+                   "To bring it back: close the program and put the copy in place of workspace.db."),
+            Lang.T("Готово", "Done"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    /// <summary>
+    /// Резервно копие и изчистване — без питане. Копието е в „Backups“ до базата;
+    /// без него изчистването не започва.
+    /// </summary>
+    internal string ClearWithBackup()
+    {
+        var folder = Path.Combine(Path.GetDirectoryName(_workspace.Path)!, "Backups");
+        Directory.CreateDirectory(folder);
+
+        var backup = Path.Combine(folder, $"before-clear-{DateTime.Now:yyyy-MM-dd-HHmmss}.db");
+
+        _workspace.BackupTo(backup);
+        _workspace.ClearStock();
+
+        return backup;
     }
 
     // ------------------------------------------------------------- обновяване
@@ -1120,14 +1295,30 @@ internal sealed class SettingsPage : ContentPage
             $"Log: {Hide(log)} ({(File.Exists(log) ? File.GetLastWriteTime(log).ToString("dd.MM.yyyy HH:mm") : "—")})");
     }
 
-    /// <summary>Пътят без името на потребителя в Windows — %LOCALAPPDATA% вместо профила.</summary>
+    /// <summary>
+    /// Пътят без името на потребителя в Windows — %LOCALAPPDATA% или
+    /// %USERPROFILE% вместо профила.
+    ///
+    /// От 1.3.1 базата стои до програмата, а преносимото копие често е на
+    /// работния плот или в „Изтегляния“ — тоест в профила, но не в
+    /// %LOCALAPPDATA%. Името на човека не бива да тръгне с данните за поддръжка
+    /// и оттам.
+    /// </summary>
     internal static string HideProfile(string path)
     {
-        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        foreach (var (folder, name) in new[]
+                 {
+                     (Environment.SpecialFolder.LocalApplicationData, "%LOCALAPPDATA%"),
+                     (Environment.SpecialFolder.UserProfile, "%USERPROFILE%")
+                 })
+        {
+            var root = Environment.GetFolderPath(folder);
 
-        return local.Length > 0 && path.StartsWith(local, StringComparison.OrdinalIgnoreCase)
-            ? "%LOCALAPPDATA%" + path[local.Length..]
-            : path;
+            if (root.Length > 0 && path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                return name + path[root.Length..];
+        }
+
+        return path;
     }
 
     /// <summary>
@@ -1158,6 +1349,7 @@ internal sealed class SettingsPage : ContentPage
             _viewIcons.Checked = _workspace.Settings.GetBool(SettingsStore.Keys.StoreViewIcons, true);
             _account.Text = AppServices.Account.Describe();
             _database.Text = _workspace.Path;
+            _databaseSays.Text = DatabaseText();
             _autoCheck.Checked = _workspace.Settings.GetBool(SettingsStore.Keys.UpdateAuto, true);
             _prerelease.Checked = _workspace.Settings.GetBool(SettingsStore.Keys.UpdatePrerelease, false);
 

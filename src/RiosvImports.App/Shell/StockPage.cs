@@ -814,7 +814,16 @@ internal sealed class StockPage : ContentPage
     {
         Style(_master, multi: true);
         _master.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        _master.SelectionChanged += (_, _) => { ShowDetail(); Weigh(); };
+        // Докато таблицата се пълни наново, изборът в нея скача по няколко пъти —
+        // изчистване, първи ред, възстановен ред — и всеки скок пълнеше долната
+        // таблица изцяло. Пресмятането я пълни веднъж, накрая.
+        _master.SelectionChanged += (_, _) =>
+        {
+            if (_rebuilding) return;
+
+            ShowDetail();
+            Weigh();
+        };
         _master.ColumnHeaderMouseClick += (_, e) =>
         {
             // Ляв бутон подрежда, десен пресява — същото разделение, което
@@ -1221,6 +1230,8 @@ internal sealed class StockPage : ContentPage
 
         grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.Surface;
         grid.ColumnHeadersDefaultCellStyle.ForeColor = Theme.InkStrong;
+        grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.Surface;
+        grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Theme.InkStrong;
         grid.ColumnHeadersDefaultCellStyle.Font = Theme.Bold;
         grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 6, 6, 6);
 
@@ -1301,11 +1312,28 @@ internal sealed class StockPage : ContentPage
         _stage.SelectedIndex = index >= 0 ? index : 0;
     }
 
+    /// <summary>Тече ли пресмятане — тогава изборът в горната таблица не пълни долната.</summary>
+    private bool _rebuilding;
+
     /// <summary>Пресмята наличността и я показва в избрания разрез.</summary>
     private void Rebuild()
     {
         if (_filling || IsDisposed) return;
 
+        _rebuilding = true;
+
+        try
+        {
+            Recompute();
+        }
+        finally
+        {
+            _rebuilding = false;
+        }
+    }
+
+    private void Recompute()
+    {
         _pageTitle.Text = _scope.Titled(Lang.T("Склад", "Store"));
 
         _master.Rows.Clear();
@@ -1668,7 +1696,7 @@ internal sealed class StockPage : ContentPage
                 g.Min(s => s.Batch.ReceivedOn)))
             .ToList();
 
-        foreach (var pile in Arrange(rows, byCode: true)) Add(pile);
+        Add(Arrange(rows, byCode: true));
     }
 
     /// <summary>Един ред от горната таблица, сведен до това, по което се подрежда.</summary>
@@ -1693,25 +1721,41 @@ internal sealed class StockPage : ContentPage
             : rows.OrderByDescending(p => p.Amount)
     };
 
-    /// <summary>Слага един ред в горната таблица.</summary>
-    private void Add(Pile pile)
+    /// <summary>
+    /// Слага редовете в горната таблица — наведнъж, както в „Поотделно“: по
+    /// клиент редовете са колкото доставчиците, а те са стотици.
+    /// </summary>
+    private void Add(IEnumerable<Pile> piles)
     {
-        var index = _master.Rows.Add();
-        var row = _master.Rows[index];
+        int At(string column) => _master.Columns[column]!.Index;
 
-        row.Cells[KeyColumn].Value = pile.Key.Length > 0 ? pile.Key : Lang.T("—", "—");
+        var (key, name, amount, count, age) =
+            (At(KeyColumn), At(NameColumn), At(AmountColumn), At(CountColumn), At(AgeColumn));
 
-        row.Cells[NameColumn].Value = pile.Name.Length > 0
-            ? pile.Name
-            : ByReceiver ? Lang.T("(получател не е посочен)", "(no receiver stated)")
+        var unnamed = ByReceiver ? Lang.T("(получател не е посочен)", "(no receiver stated)")
             : ByPartner ? Lang.T("(клиент не е посочен)", "(no client stated)")
             : string.Empty;
 
-        row.Cells[AmountColumn].Value = SplitMath.Amount(pile.Amount);
-        row.Cells[CountColumn].Value = pile.Count.ToString();
-        row.Cells[AgeColumn].Value = pile.Oldest.ToString(ValueConverter.BulgarianDateFormat);
+        var rows = new List<DataGridViewRow>();
 
-        row.Tag = pile.Key;
+        foreach (var pile in piles)
+        {
+            var row = (DataGridViewRow)_master.RowTemplate.Clone();
+
+            row.CreateCells(_master);
+
+            row.Cells[key].Value = pile.Key.Length > 0 ? pile.Key : Lang.T("—", "—");
+            row.Cells[name].Value = pile.Name.Length > 0 ? pile.Name : unnamed;
+            row.Cells[amount].Value = SplitMath.Amount(pile.Amount);
+            row.Cells[count].Value = pile.Count.ToString();
+            row.Cells[age].Value = pile.Oldest.ToString(ValueConverter.BulgarianDateFormat);
+
+            row.Tag = pile.Key;
+
+            rows.Add(row);
+        }
+
+        _master.Rows.AddRange([.. rows]);
     }
 
     private void FillByPartner(IReadOnlyList<StockLine> shares)
@@ -1733,7 +1777,7 @@ internal sealed class StockPage : ContentPage
                 g.Min(s => s.Batch.ReceivedOn)))
             .ToList();
 
-        foreach (var pile in Arrange(rows, byCode: false)) Add(pile);
+        Add(Arrange(rows, byCode: false));
     }
 
     /// <summary>
@@ -1763,7 +1807,7 @@ internal sealed class StockPage : ContentPage
                 g.Min(s => s.Batch.ReceivedOn)))
             .ToList();
 
-        foreach (var pile in Arrange(rows, byCode: false)) Add(pile);
+        Add(Arrange(rows, byCode: false));
     }
 
     /// <summary>
@@ -1807,7 +1851,7 @@ internal sealed class StockPage : ContentPage
         // по няколкостотин дяла на месец — а добавяне по един струваше две секунди
         // на всяко натискане в търсенето. Номерата на стълбовете се вземат веднъж:
         // ред, още невързан за таблицата, не познава клетките си по име.
-        int At(string column) => _master.Columns[column].Index;
+        int At(string column) => _master.Columns[column]!.Index;
 
         var (date, code, name, batch, client, document, receiver, contract, note, amount) =
             (At(HandedColumn), At(KeyColumn), At(NameColumn), At(BatchColumn), At(PartnerColumn),
@@ -1910,41 +1954,58 @@ internal sealed class StockPage : ContentPage
                 : chosen.OrderBy(s => s.Batch.ReceivedOn).ThenBy(s => s.Batch.Id)
         }).ToList();
 
-        foreach (var share in rows)
-        {
-            var index = _detail.Rows.Add();
-            var row = _detail.Rows[index];
+        // Наведнъж, а не ред по ред — както горе в „Поотделно“. Тук редовете се
+        // пълнят наново при всяко щракване по горната таблица, а в „Получен“ зад
+        // един код стоят стотици партиди: по един ред това беше четвърт секунда
+        // на щракване. Номерата на стълбовете се вземат веднъж: ред, още невързан
+        // за таблицата, не познава клетките си по име.
+        int At(string column) => _detail.Columns[column]!.Index;
 
-            row.Cells[BatchColumn].Value = BatchText(share);
+        var (batch, partner, handedAt, receiver, contract, note, document, taken) =
+            (At(BatchColumn), At(PartnerColumn), At(HandedColumn), At(ReceiverColumn),
+             At(ContractColumn), At(NoteColumn), At(DocumentColumn), At(TakenColumn));
+
+        var notStated = Lang.T("(не е посочен)", "(not stated)");
+        var built = new DataGridViewRow[rows.Count];
+
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var share = rows[i];
+            var row = (DataGridViewRow)_detail.RowTemplate.Clone();
+
+            row.CreateCells(_detail);
+
+            row.Cells[batch].Value = BatchText(share);
 
             // Долу стои онова, което ГОРЕ го няма: по код — клиентът, по
             // клиент и по получател — кодът. Повторено, то не казва нищо ново.
-            row.Cells[PartnerColumn].Value = ByPartner || ByReceiver
+            row.Cells[partner].Value = ByPartner || ByReceiver
                 ? Describe(share.Ewc)
                 : Partner(share.Batch);
 
             // Заради тези двата редовете в летописа не се събират: един ред е
             // едно предаване. Извън летописа стълбовете ги няма.
             if (Chronicle)
-                row.Cells[HandedColumn].Value = share.Moved is { } moved
+                row.Cells[handedAt].Value = share.Moved is { } moved
                     ? moved.ToString(ValueConverter.BulgarianDateFormat)
                     : string.Empty;
 
             if (CanSeeReceivers)
             {
-                row.Cells[ReceiverColumn].Value = share.Party.Known
-                    ? share.Party.Display
-                    : Lang.T("(не е посочен)", "(not stated)");
-
-                row.Cells[ContractColumn].Value = share.Contract;
-                row.Cells[NoteColumn].Value = share.Note;
+                row.Cells[receiver].Value = share.Party.Known ? share.Party.Display : notStated;
+                row.Cells[contract].Value = share.Contract;
+                row.Cells[note].Value = share.Note;
             }
 
-            row.Cells[DocumentColumn].Value = DocumentText(share);
+            row.Cells[document].Value = DocumentText(share);
 
-            row.Cells[TakenColumn].Value = SplitMath.Amount(share.Amount);
+            row.Cells[taken].Value = SplitMath.Amount(share.Amount);
             row.Tag = share;
+
+            built[i] = row;
         }
+
+        _detail.Rows.AddRange(built);
 
         Mark(_detail, _detailSort, _detailDown);
 
@@ -2179,7 +2240,7 @@ internal sealed class StockPage : ContentPage
             return;
         }
 
-        OpenMonth(kind, startWithImport: true);
+        OpenMonth(kind, SheetImport.Start);
     }
 
     /// <summary>
@@ -3540,8 +3601,8 @@ internal sealed class StockPage : ContentPage
     /// излиза от склад „Получен“, без да е минало през третиране, и не тръгва от
     /// избрани редове в гледания склад.
     /// </summary>
-    private void OpenMonth(MoveKind kind, bool startWithImport = false) =>
-        OpenMonth(kind, LedgerPeriod.Of(DateOnly.FromDateTime(_date.Value)), startWithImport);
+    private void OpenMonth(MoveKind kind, SheetImport import = SheetImport.Offered) =>
+        OpenMonth(kind, LedgerPeriod.Of(DateOnly.FromDateTime(_date.Value)), import);
 
     /// <summary>
     /// Същото, но за ИЗРИЧНО посочен месец.
@@ -3550,12 +3611,14 @@ internal sealed class StockPage : ContentPage
     /// месецът на страницата е онзи, в който човек гледа — двата се различават
     /// точно когато дневникът върши работа.
     /// </summary>
-    private void OpenMonth(MoveKind kind, LedgerPeriod period, bool startWithImport = false)
+    private void OpenMonth(MoveKind kind, LedgerPeriod period, SheetImport import = SheetImport.Offered)
     {
         if (Company() is not { } companyId) return;
 
+        // Оттук внасянето остава: складът е единственото място, откъдето се
+        // внася файл (виж SheetImport).
         using var dialog = new MoveSheetDialog(
-            _service, _workspace, companyId, Stage(), kind, period, startWithImport);
+            _service, _workspace, companyId, Stage(), kind, period, import);
 
         dialog.ShowDialog(this);
 
@@ -3596,6 +3659,13 @@ internal sealed class StockPage : ContentPage
     /// <summary>Записаното третиране е ново движение — „Месец“ трябва да научи.</summary>
     public event EventHandler? LedgerChanged;
 
+    /// <summary>Ctrl+F от главния прозорец — курсорът отива в търсенето.</summary>
+    public override bool FocusSearch()
+    {
+        _search.Focus();
+        return true;
+    }
+
     // ------------------------------------------------------------- за теста
 
     /// <summary>Заглавието на екрана — ползва се от тестовете.</summary>
@@ -3620,6 +3690,41 @@ internal sealed class StockPage : ContentPage
 
     /// <summary>Същото за долната таблица с партидите.</summary>
     internal string DetailAmountHeaderText => _detail.Columns[TakenColumn].HeaderText;
+
+    /// <summary>
+    /// Показва склада към дата — с едно пресмятане, не с две.
+    ///
+    /// Оттук влиза „Отвори „Третиран““ от проверката на месеца: човекът иска да
+    /// види какво чака в края на месеца, в който отчетът е спрял. Филтрите се
+    /// махат — забравен филтър би скрил точно купчината, заради която е дошъл.
+    /// </summary>
+    public void Open(StoreKind store, DateOnly on)
+    {
+        _filling = true;
+
+        try
+        {
+            _codeFilter = null;
+            _partnerFilter = null;
+            _receiverFilter = null;
+            _contractFilter = null;
+            _noteFilter = null;
+
+            _days.Text = string.Empty;
+            _least.Text = string.Empty;
+            _search.Text = string.Empty;
+            _monthOnly.Checked = false;
+
+            _store.SelectedIndex = Math.Max(0, Moves.Stores.ToList().IndexOf(store));
+            _date.Value = on.ToDateTime(TimeOnly.MinValue);
+        }
+        finally
+        {
+            _filling = false;
+        }
+
+        Rebuild();
+    }
 
     internal void UseStore(StoreKind store)
     {

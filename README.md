@@ -21,7 +21,7 @@ XML е точно техническата стъпка, която хората
 dotnet build
 dotnet run --project src\RiosvImports.App
 dotnet run --project src\RiosvImports.App -- --zoom 1.5     # както на лаптоп при 150 %
-dotnet run --project src\RiosvImports.App -- --db проба.db  # друга база, не тази в профила
+dotnet run --project src\RiosvImports.App -- --db проба.db  # друга база, не тази до програмата
 dotnet run --project tests\RiosvImports.Tests              # над 700 проверки
 ```
 
@@ -64,8 +64,11 @@ dotnet run --project tests\RiosvImports.Tests              # над 700 пров
 3. **Проверяваш** (F5) — грешките излизат долу; двоен клик отваря мястото.
 4. **Създаваш файла** — XML по схемата, подписан с твоя КЕП.
 
-Работата стои в местна SQLite база в `%LOCALAPPDATA%\RIOSV Imports`. Нищо от
-нея не се качва никъде.
+Работата стои в местна SQLite база в папка `Data` до програмата — при
+инсталираната това е `%LOCALAPPDATA%\RiosvImports\Data`, над `current`, която
+се сменя при всяко обновяване. Нищо от нея не се качва никъде. До 1.3.0 базата
+стоеше в `%LOCALAPPDATA%\RIOSV Imports`; оттам се пренася сама при първото
+пускане, а при деинсталиране работата се връща там.
 
 ---
 

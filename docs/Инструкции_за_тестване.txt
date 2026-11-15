@@ -219,7 +219,8 @@
   3. Снимка на екрана със съобщението за грешка.
   4. Файла с техническите подробности, ако съществува:
 
-         %LOCALAPPDATA%\RIOSV Imports\error.log
+         папка "Data" до програмата, файл error.log
+         (при инсталираната: %LOCALAPPDATA%\RiosvImports\Data\error.log)
 
      (Копирайте реда горе в адресната лента на Windows Explorer.)
 
