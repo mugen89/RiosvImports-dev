@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Инсталаторът, който хората свалят — RiosvImports-win-Setup.exe.
+
+    Инсталаторът на Velopack не пита къде да сложи програмата: той знае само
+    %LOCALAPPDATA%\RiosvImports, а другата папка се дава на командния ред
+    (ключът installto). Този прозорец пита, пази работата и пуска вътрешния тихо.
+
+    .NET Framework 4.7.2, а не .NET 9: Framework е в самия Windows 10 и 11, а
+    инсталаторът трябва да тръгне на компютър, на който още няма нищо. .NET 9,
+    сложен вътре, би добавил още 60 MB.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>RiosvImports-win-Setup</AssemblyName>
+    <RootNamespace>RiosvImports.Setup</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <Description>RIOSV Imports — инсталиране</Description>
+  </PropertyGroup>
+
+  <!--
+    Инсталаторът на Velopack влиза вътре само при издание: tools\release.ps1
+    го прави с „vpk pack“ и подава пътя му тук (-p:InnerSetup=…). Сглобен без
+    него — в решението и в тестовете, — прозорецът се отваря, а при
+    „Инсталирай“ казва, че вътре няма програма.
+  -->
+  <ItemGroup Condition="'$(InnerSetup)' != ''">
+    <EmbeddedResource Include="$(InnerSetup)" LogicalName="VelopackSetup.exe" />
+  </ItemGroup>
+
+</Project>

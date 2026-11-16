@@ -25,8 +25,13 @@ internal static class Program
         // Преди деинсталиране работата се пренася в профила: Velopack трие цялата
         // папка на програмата, а от 1.3.1 базата стои в нея („Data“). Оттам тя се
         // връща сама при следващо инсталиране (DataLocation.Adopt).
+        //
+        // При инсталиране върху вече инсталирана програма Velopack мести старата
+        // папка встрани и я трие след новата — без да пита старата програма.
+        // Работата се взема оттам, докато още стои (DataLocation.Recover).
         VelopackApp.Build()
             .SetAutoApplyOnStartup(false)
+            .OnAfterInstallFastCallback(_ => DataLocation.Recover(DataLocation.Root(AppContext.BaseDirectory)))
             .OnBeforeUninstallFastCallback(_ => DataLocation.Rescue(DataLocation.Folder, DataLocation.ProfileFolder))
             .Run();
 

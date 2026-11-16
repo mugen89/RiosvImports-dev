@@ -44,9 +44,7 @@ internal static class DataLocation
     internal const string FolderVariable = "RIOSV_DATA";
 
     /// <summary>Папката на профила — старото място на базата и мястото, където чака при деинсталиране.</summary>
-    public static string ProfileFolder => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "RIOSV Imports");
+    public static string ProfileFolder => Data.Workspace.ProfileFolder();
 
     private static readonly Lazy<string> Resolved = new(() =>
         Environment.GetEnvironmentVariable(FolderVariable) is { Length: > 0 } custom
@@ -225,6 +223,108 @@ internal static class DataLocation
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// При инсталиране върху вече инсталирана програма: работата се взема от
+    /// старата папка, преди тя да бъде изтрита.
+    ///
+    /// Пуснат там, където програмата вече е, Setup.exe на Velopack пита „Repair“
+    /// или „Update“ и после премества цялата стара папка встрани —
+    /// RiosvImports_&lt;16 знака&gt;, а в по-новите издания RiosvImports.&lt;16 знака&gt;,
+    /// — слага новата и трие старата заедно с „Data“. Куката за инсталиране на
+    /// новата програма се пуска, докато старата папка още стои: тогава работата
+    /// се копира в новата. В 1.3.1 повторното инсталиране изтриваше работата.
+    ///
+    /// Само ако в новата папка още няма база: там написаното е по-новото. Базата
+    /// минава през SQLite — с последните записи от WAL — и първа: Velopack дава на
+    /// куката 30 секунди, а резервните копия до нея са само добавка.
+    /// </summary>
+    /// <returns>Папката „Data“, от която е взета работата, или null.</returns>
+    internal static string? Recover(string root)
+    {
+        try
+        {
+            root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+
+            var parent = Path.GetDirectoryName(root);
+            var target = Path.Combine(root, FolderName);
+
+            if (parent is null || !Directory.Exists(parent) || File.Exists(Path.Combine(target, FileName))) return null;
+
+            var name = Path.GetFileName(root);
+
+            var source = Directory.EnumerateDirectories(parent)
+                .Where(folder => SetAside(name, Path.GetFileName(folder)))
+                .Select(folder => Path.Combine(folder, FolderName))
+                .Where(data => File.Exists(Path.Combine(data, FileName)))
+                .OrderByDescending(data => LastWritten(Path.Combine(data, FileName)))
+                .FirstOrDefault();
+
+            if (source is null) return null;
+
+            Directory.CreateDirectory(target);
+
+            var database = Path.Combine(target, FileName);
+            var partial = database + ".partial";
+
+            if (File.Exists(partial)) File.Delete(partial);
+
+            Data.Workspace.Copy(Path.Combine(source, FileName), partial);
+            File.Move(partial, database);
+
+            // Останалото — резервни копия, дневник — без да се презаписва нищо.
+            foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(source, file);
+
+                if (relative.StartsWith(FileName, StringComparison.OrdinalIgnoreCase)) continue;
+
+                var copy = Path.Combine(target, relative);
+
+                if (File.Exists(copy)) continue;
+
+                Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
+                File.Copy(file, copy);
+            }
+
+            return source;
+        }
+        catch
+        {
+            // Куката не бива да спира инсталирането. Инсталаторът на RIOSV Imports
+            // пази и свое копие на работата и го връща, ако тук нещо не стане.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Името на папка, която Velopack е преместил встрани при повторно инсталиране.
+    ///
+    /// 0.0.1298: „{корен}_{16 букви и цифри}“; по-новите издания сменят
+    /// разширението: „{корен без разширение}.{16 букви и цифри}“.
+    /// </summary>
+    internal static bool SetAside(string rootName, string candidate)
+    {
+        static bool Random(string tail) => tail.Length == 16 && tail.All(char.IsAsciiLetterOrDigit);
+
+        if (candidate.Length == rootName.Length + 17 &&
+            candidate.StartsWith(rootName + "_", StringComparison.OrdinalIgnoreCase) &&
+            Random(candidate[(rootName.Length + 1)..])) return true;
+
+        var stem = Path.GetFileNameWithoutExtension(rootName);
+
+        return candidate.Length == stem.Length + 17 &&
+               candidate.StartsWith(stem + ".", StringComparison.OrdinalIgnoreCase) &&
+               Random(candidate[(stem.Length + 1)..]);
+    }
+
+    private static DateTime LastWritten(string database)
+    {
+        var written = File.GetLastWriteTimeUtc(database);
+        var wal = database + "-wal";
+
+        return File.Exists(wal) && File.GetLastWriteTimeUtc(wal) > written ? File.GetLastWriteTimeUtc(wal) : written;
     }
 
     private static bool Same(string a, string b) =>

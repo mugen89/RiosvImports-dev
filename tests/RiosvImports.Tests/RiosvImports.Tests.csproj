@@ -19,4 +19,12 @@
     <ProjectReference Include="..\..\src\RiosvImports.App\RiosvImports.App.csproj" />
   </ItemGroup>
 
+  <!-- Решенията на инсталатора — къде отива програмата и как се пази работата —
+       се проверяват тук. Инсталаторът е на .NET Framework и не може да се
+       добави като проект; двата файла се сглобяват направо. -->
+  <ItemGroup>
+    <Compile Include="..\..\src\RiosvImports.Setup\InstallPlan.cs" Link="Setup\InstallPlan.cs" />
+    <Compile Include="..\..\src\RiosvImports.Setup\InstallData.cs" Link="Setup\InstallData.cs" />
+  </ItemGroup>
+
 </Project>

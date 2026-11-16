@@ -624,6 +624,21 @@ public sealed class Workspace : IDisposable
     }
 
     /// <summary>
+    /// Друга папка вместо профила — за проверка на инсталирането и махането от
+    /// край до край. Куките на Velopack се пускат като отделни процеси и наследяват
+    /// променливата; без нея проверката би писала в истинския профил.
+    /// </summary>
+    public const string ProfileVariable = "RIOSV_PROFILE";
+
+    /// <summary>Папката на програмата в профила на потребителя (%LOCALAPPDATA%\RIOSV Imports).</summary>
+    public static string ProfileFolder() =>
+        Environment.GetEnvironmentVariable(ProfileVariable) is { Length: > 0 } custom
+            ? System.IO.Path.GetFullPath(custom)
+            : System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "RIOSV Imports");
+
+    /// <summary>
     /// Старото място на базата — в профила на потребителя.
     ///
     /// От 1.3.1 програмата пази работата до себе си (виж DataLocation в
@@ -631,10 +646,7 @@ public sealed class Workspace : IDisposable
     /// подразбиране за онези, които не знаят къде е програмата — инструментът за
     /// пробни данни, — и като мястото, където работата чака след деинсталиране.
     /// </summary>
-    public static string DefaultPath() => System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "RIOSV Imports",
-        "workspace.db");
+    public static string DefaultPath() => System.IO.Path.Combine(ProfileFolder(), "workspace.db");
 
     /// <summary>
     /// Копира база от един файл в друг през SQLite — с всичко, което още стои в WAL.

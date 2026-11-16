@@ -11,6 +11,10 @@
     показват в програмата, щом изданието бъде намерено, затова се пишат за
     човека, който работи с нея.
 
+    RiosvImports-win-Setup.exe в изданието е нашият инсталатор
+    (src\RiosvImports.Setup) — той пита къде да стои програмата и пази
+    работата. Този на Velopack стои вътре в него и се пуска тихо.
+
     Еднократна подготовка:
         dotnet tool install -g vpk --version 0.0.1298
 
@@ -182,6 +186,45 @@ if ($SignParams) { $pack += @('--signParams', $SignParams) }
 
 & vpk @pack
 if ($LASTEXITCODE -ne 0) { throw 'Пакетирането се провали.' }
+
+# ------------------------------------------------------------------ инсталатор
+
+# Инсталаторът на Velopack не пита къде да сложи програмата, а пуснат отново
+# върху инсталирана програма трие папката ѝ заедно с работата. Хората свалят
+# нашия (src\RiosvImports.Setup): той пита къде, пази работата и пуска този на
+# Velopack вътре, тихо. Името на файла остава същото — така „vpk upload“ качва
+# нашия, а връзките към изданието не се сменят.
+Write-Host 'Инсталатор ...' -ForegroundColor Cyan
+
+$setupName    = 'RiosvImports-win-Setup.exe'
+$setupProject = Join-Path $root 'src\RiosvImports.Setup\RiosvImports.Setup.csproj'
+$setupWork    = Join-Path $artifacts 'setup'
+$inner        = Join-Path $setupWork 'RiosvImports-velopack-Setup.exe'
+$setupOut     = Join-Path $setupWork 'out'
+$outer        = Join-Path $releases $setupName
+
+if (Test-Path $setupWork) { Remove-Item $setupWork -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $setupWork | Out-Null
+
+Move-Item -LiteralPath $outer -Destination $inner -Force
+
+dotnet build $setupProject -c Release --no-incremental --nologo -p:Version=$Version "-p:InnerSetup=$inner" -o $setupOut
+if ($LASTEXITCODE -ne 0) { throw 'Инсталаторът не се сглоби.' }
+
+Copy-Item -LiteralPath (Join-Path $setupOut $setupName) -Destination $outer -Force
+
+# Вграденият е подписан от vpk; нашият — тук, със същите аргументи.
+if ($SignParams) {
+    $signtool = Get-Command signtool -ErrorAction SilentlyContinue
+
+    if ($signtool) {
+        & $signtool.Source sign ($SignParams -split '\s+') $outer
+        if ($LASTEXITCODE -ne 0) { throw 'Подписването на инсталатора се провали.' }
+    }
+    else {
+        Write-Warning 'Няма signtool: инсталаторът остава неподписан (вграденият на Velopack е подписан).'
+    }
+}
 
 # ------------------------------------------------------------------ качване
 

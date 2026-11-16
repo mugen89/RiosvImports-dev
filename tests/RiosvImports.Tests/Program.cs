@@ -23,6 +23,7 @@ using RiosvImports.Core.Values;
 using RiosvImports.Core.Xml;
 using RiosvImports.Core.Import;
 using RiosvImports.Core.Localization;
+using RiosvImports.Setup;
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -17621,6 +17622,316 @@ Console.WriteLine("### ТЕСТ - „За тестване“ изчиства �
         clearProblems.Count == 0,
         $"{clearProblems.Count} проблема" + (clearProblems.Count > 0 ? ": " + string.Join(" | ", clearProblems.Take(5)) : ""));
 }
+
+// =============================================== 1.3.2: инсталаторът пита къде
+//
+// Velopack смята цялата папка на програмата за своя: при повторно инсталиране я
+// мести встрани и я трие, при махане я изпразва. Затова програмата влиза само в
+// празна папка — в непразна получава подпапка „RIOSV Imports“ — и никога в
+// Windows, Program Files, мрежова папка или направо в корена на диска. Нищо тук
+// не инсталира: само се решава къде.
+Console.WriteLine();
+Console.WriteLine("### ТЕСТ - инсталаторът пита къде и не слага програмата сред чужди файлове");
+{
+    var planNotes = new List<string>();
+    string? planError = null;
+
+    try
+    {
+        var root = Path.Combine(work, $"plan_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+
+        var guarded = new[] { Path.Combine(root, "Windows"), Path.Combine(root, "Program Files") };
+
+        InstallPlan Plan(string? typed, ExistingInstall? existing = null) => InstallPlan.For(typed, existing, guarded);
+
+        static string N(string path) => InstallPlan.Normalize(path);
+
+        planNotes.Add(Plan("").Kind == PlanKind.Invalid ? "" : "празното поле се приема");
+        planNotes.Add(Plan(@"\\server\share\RIOSV").Kind == PlanKind.Invalid ? "" : "мрежова папка се приема");
+        planNotes.Add(Plan("RIOSV Imports").Kind == PlanKind.Invalid ? "" : "път без диск се приема");
+        planNotes.Add(Plan(Path.Combine(root, "a|b")).Kind == PlanKind.Invalid ? "" : "забранен знак в името се приема");
+        planNotes.Add(Plan(Path.Combine(root, new string('x', 160))).Kind == PlanKind.Invalid ? "" : "твърде дълъг път се приема");
+
+        // Нова папка — направо; с „\“ накрая — същата.
+        var fresh = Path.Combine(root, "fresh");
+        var plan = Plan(fresh + "\\");
+        planNotes.Add(plan.Kind == PlanKind.Fresh && plan.Folder == N(fresh) && !plan.Extended
+            ? "" : $"нова папка: {plan.Kind} {plan.Folder}");
+
+        // Празна — също направо; „.dead“ от махната програма не я прави чужда.
+        var empty = Path.Combine(root, "empty");
+        Directory.CreateDirectory(empty);
+        File.WriteAllText(Path.Combine(empty, ".dead"), "");
+        plan = Plan(empty);
+        planNotes.Add(plan.Kind == PlanKind.Fresh && plan.Folder == N(empty) && !plan.Extended
+            ? "" : $"празна папка с „.dead“: {plan.Kind} {plan.Folder}");
+
+        // Току-що махната: Velopack трие Update.exe чак след няколко секунди —
+        // папката с „.dead“ е празна, а с „Data“ в нея — останала работа.
+        var removed = Path.Combine(root, "removed");
+        Directory.CreateDirectory(removed);
+        File.WriteAllText(Path.Combine(removed, ".dead"), "");
+        File.WriteAllText(Path.Combine(removed, "Update.exe"), "");
+        planNotes.Add(InstallPlan.Look(removed) == FolderState.Empty ? "" : "махнатата програма се брои за инсталирана");
+        Directory.CreateDirectory(Path.Combine(removed, "Data"));
+        planNotes.Add(InstallPlan.Look(removed) == FolderState.Leftover ? "" : "работата в махната папка не се вижда");
+
+        // Непразна чужда — подпапка „RIOSV Imports“, никога направо.
+        var busy = Path.Combine(root, "Documents");
+        Directory.CreateDirectory(busy);
+        File.WriteAllText(Path.Combine(busy, "отчет.docx"), "x");
+        plan = Plan(busy);
+        planNotes.Add(plan.Kind == PlanKind.Fresh && plan.Extended &&
+                      plan.Folder == Path.Combine(N(busy), InstallPlan.SubFolder)
+            ? "" : $"непразна папка: {plan.Kind} {plan.Folder}");
+
+        // ... а ако и подпапката е чужда — не става; втора подпапка няма.
+        Directory.CreateDirectory(Path.Combine(busy, InstallPlan.SubFolder));
+        File.WriteAllText(Path.Combine(busy, InstallPlan.SubFolder, "чуждо.txt"), "x");
+        planNotes.Add(Plan(busy).Kind == PlanKind.Invalid ? "" : "чуждата подпапка „RIOSV Imports“ се приема");
+        planNotes.Add(Plan(Path.Combine(busy, InstallPlan.SubFolder)).Kind == PlanKind.Invalid
+            ? "" : "непразна „RIOSV Imports“ получава втора подпапка");
+
+        // Коренът на диска — винаги подпапка. Само се гледа, нищо не се пише.
+        var system = Path.GetPathRoot(Environment.GetFolderPath(Environment.SpecialFolder.Windows))!;
+        plan = Plan(system);
+        planNotes.Add(plan.Extended && plan.Folder == Path.Combine(system, InstallPlan.SubFolder)
+            ? "" : $"коренът на диска: {plan.Kind} {plan.Folder}");
+
+        // Windows и Program Files — не.
+        planNotes.Add(Plan(Path.Combine(guarded[1], "RIOSV Imports")).Kind == PlanKind.Invalid ? "" : "Program Files се приема");
+        planNotes.Add(Plan(guarded[0]).Kind == PlanKind.Invalid ? "" : "папката на Windows се приема");
+
+        // Вече инсталирана: същата папка — обновяване; вътре в нея — не; друга — преместване.
+        var installed = Path.Combine(root, "installed");
+        Directory.CreateDirectory(Path.Combine(installed, "current"));
+        File.WriteAllText(Path.Combine(installed, "Update.exe"), "");
+        File.WriteAllText(Path.Combine(installed, "current", "RIOSV Imports.exe"), "");
+        var existing = new ExistingInstall(installed, "1.3.1");
+
+        plan = Plan(installed, existing);
+        planNotes.Add(plan.Kind == PlanKind.Update && plan.Existing == existing ? "" : $"същата папка: {plan.Kind}");
+        planNotes.Add(Plan(Path.Combine(installed, "Data"), existing).Kind == PlanKind.Invalid ? "" : "папка вътре в програмата се приема");
+
+        plan = Plan(fresh, existing);
+        planNotes.Add(plan.Kind == PlanKind.Move && plan.Existing == existing ? "" : $"друга папка при инсталирана: {plan.Kind}");
+
+        // Непразният родител на инсталираната води до нея — обновяване, не втора програма.
+        var parent = Path.Combine(root, "parent");
+        var inside = Path.Combine(parent, InstallPlan.SubFolder);
+        Directory.CreateDirectory(Path.Combine(inside, "current"));
+        File.WriteAllText(Path.Combine(inside, "Update.exe"), "");
+        plan = Plan(parent, new ExistingInstall(inside, "1.3.1"));
+        planNotes.Add(plan.Kind == PlanKind.Update ? "" : $"родителят на инсталираната: {plan.Kind} {plan.Folder}");
+
+        // Копие, което Windows не помни — слага се наново; до друго инсталирано — не.
+        plan = Plan(installed);
+        planNotes.Add(plan.Kind == PlanKind.Update && plan.Existing is null ? "" : $"непомнено копие: {plan.Kind}");
+        planNotes.Add(Plan(installed, new ExistingInstall(fresh, "")).Kind == PlanKind.Invalid
+            ? "" : "второ копие до инсталираното се приема");
+
+        // Преносимото копие се обновява само — инсталатор там не влиза.
+        var portable = Path.Combine(root, "portable");
+        Directory.CreateDirectory(portable);
+        File.WriteAllText(Path.Combine(portable, "Update.exe"), "");
+        File.WriteAllText(Path.Combine(portable, ".portable"), "");
+        planNotes.Add(Plan(portable).Kind == PlanKind.Invalid ? "" : "преносимото копие се приема");
+
+        // Останала работа без програма: новата продължава с нея — но там не се мести друга.
+        var leftover = Path.Combine(root, "leftover");
+        Directory.CreateDirectory(Path.Combine(leftover, "Data"));
+        File.WriteAllText(Path.Combine(leftover, "Data", "workspace.db"), "");
+        plan = Plan(leftover);
+        planNotes.Add(plan.Kind == PlanKind.Fresh && plan.KeepsWork && !plan.Extended ? "" : $"останала работа: {plan.Kind}");
+        planNotes.Add(Plan(leftover, existing).Kind == PlanKind.Invalid ? "" : "преместване върху чужда работа се приема");
+
+        // Променливи като %TEMP% се разгръщат.
+        Environment.SetEnvironmentVariable("RIOSV_PLAN_TEST", root);
+        plan = Plan(@"%RIOSV_PLAN_TEST%\env");
+        Environment.SetEnvironmentVariable("RIOSV_PLAN_TEST", null);
+        planNotes.Add(plan.Folder == Path.Combine(N(root), "env") ? "" : "променливата в пътя не се разгъва: " + plan.Folder);
+
+        // Пътят на командния ред: с интервал — в кавички; „\“ накрая не глъта кавичката.
+        planNotes.Add(CommandLine.Quote(@"C:\RIOSV Imports") == "\"C:\\RIOSV Imports\"" ? "" : "кавичките около пътя");
+        planNotes.Add(CommandLine.Quote(@"C:\A\") == "\"C:\\A\\\\\"" ? "" : "„\\“ накрая глъта кавичката");
+    }
+    catch (Exception ex)
+    {
+        planError = ex.ToString();
+    }
+
+    if (planError is not null) Console.WriteLine("     " + planError);
+
+    var planProblems = planNotes.Where(n => n.Length > 0).ToList();
+    foreach (var problem in planProblems) Console.WriteLine("     " + problem);
+
+    Check("решението къде да се инсталира минава без изключение", planError is null);
+    Check($"направени са всичките {planNotes.Count} проверки", planNotes.Count == 27, $"{planNotes.Count}");
+    Check("програмата влиза само в своя папка, а инсталираната се обновява или мести", planProblems.Count == 0,
+        $"{planProblems.Count} проблема" + (planProblems.Count > 0 ? ": " + string.Join(" | ", planProblems.Take(5)) : ""));
+}
+
+
+// =============================================== 1.3.2: работата не се губи при инсталиране
+//
+// Пуснат там, където програмата вече е, инсталаторът на Velopack мести старата
+// папка встрани и я трие след новата — с „Data“ вътре. В 1.3.1 така се губеше
+// работата. Сега новата програма я взема от преместената папка (Recover), а
+// инсталаторът на RIOSV Imports пази и свое копие в профила и го връща, ако я
+// няма. При преместване копията, които старата програма оставя в профила при
+// махането си, се преименуват — иначе някой ден биха се взели за работата.
+Console.WriteLine();
+Console.WriteLine("### ТЕСТ - повторното инсталиране и преместването не губят работата");
+{
+    var keepNotes = new List<string>();
+    string? keepError = null;
+
+    try
+    {
+        var root = Path.Combine(work, $"keep_{Guid.NewGuid():N}");
+        var profile = Path.Combine(root, "profile");
+        var apps = Path.Combine(root, "apps");
+
+        // Старата инсталация: работа, резервно копие и дневник в „Data“.
+        var old = Path.Combine(apps, "RiosvImports");
+        var oldData = Path.Combine(old, "Data");
+        Directory.CreateDirectory(Path.Combine(oldData, "Backups"));
+
+        using (var db = Workspace.Open(Path.Combine(oldData, "workspace.db")))
+            db.Companies.Add("203344556", "Стара ООД");
+
+        SqliteConnection.ClearAllPools();
+        File.WriteAllText(Path.Combine(oldData, "Backups", "before-clear-2026-11-15-120000.db"), "копие");
+        File.WriteAllText(Path.Combine(oldData, "error.log"), "дневник");
+
+        keepNotes.Add(InstallData.HasWork(old) ? "" : "работата в „Data“ не се вижда");
+        keepNotes.Add(InstallData.Backup(Path.Combine(root, "nothing"), profile, DateTime.Now) is null
+            ? "" : "копие на несъществуваща работа");
+
+        // Копие в профила — цялата „Data“; второ в същата секунда не презаписва първото.
+        var at = new DateTime(2026, 11, 16, 10, 15, 0);
+        var backup = InstallData.Backup(old, profile, at);
+        keepNotes.Add(backup == Path.Combine(profile, "Backups", "before-install-2026-11-16-101500")
+            ? "" : "копието е другаде: " + backup);
+        keepNotes.Add(backup is not null && File.Exists(Path.Combine(backup, "workspace.db")) &&
+                      File.Exists(Path.Combine(backup, "Backups", "before-clear-2026-11-15-120000.db")) &&
+                      File.Exists(Path.Combine(backup, "error.log"))
+            ? "" : "копието не е на цялата „Data“");
+        var second = InstallData.Backup(old, profile, at);
+        keepNotes.Add(second is not null && second != backup && second.EndsWith("-2", StringComparison.Ordinal)
+            ? "" : "второто копие презаписва първото: " + second);
+
+        // Връщане в нова папка: базата се отваря с работата, без остатък „.partial“.
+        var fresh = Path.Combine(root, "C", "RIOSV Imports");
+        Directory.CreateDirectory(fresh);
+        keepNotes.Add(InstallData.Restore(backup!, fresh) ? "" : "работата не се върна");
+        keepNotes.Add(!File.Exists(Path.Combine(fresh, "Data", "workspace.db.partial")) ? "" : "остана „.partial“");
+        keepNotes.Add(File.Exists(Path.Combine(fresh, "Data", "Backups", "before-clear-2026-11-15-120000.db"))
+            ? "" : "резервните копия не се върнаха");
+
+        using (var db = Workspace.Open(Path.Combine(fresh, "Data", "workspace.db")))
+            keepNotes.Add(db.Companies.List().Any(c => c.Name == "Стара ООД") ? "" : "върнатата база е без работата");
+
+        SqliteConnection.ClearAllPools();
+
+        // Работата, която вече е там, е по-новата — не се презаписва.
+        keepNotes.Add(!InstallData.Restore(backup!, fresh) ? "" : "връщането презаписа по-новата работа");
+
+        // След преместване: копията от махането на старата програма се преименуват — само те.
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Combine(profile, "workspace-earlier.db"), "отпреди");
+        var before = InstallData.Rescues(profile);
+        File.WriteAllText(Path.Combine(profile, "workspace.db"), "от махането");
+        File.WriteAllText(Path.Combine(profile, "workspace-20261116-101600.db"), "от махането");
+        var retired = InstallData.RetireNew(profile, before, fresh, at);
+        keepNotes.Add(retired.Count == 2 && !File.Exists(Path.Combine(profile, "workspace.db")) &&
+                      File.Exists(Path.Combine(profile, "workspace.db.moved"))
+            ? "" : $"копията от махането не са преименувани: {retired.Count}");
+        keepNotes.Add(File.Exists(Path.Combine(profile, "workspace-earlier.db")) ? "" : "преименувано е и отпреди");
+        keepNotes.Add(File.Exists(Path.Combine(profile, "ПРЕМЕСТЕНА.txt")) ? "" : "няма бележка къде е работата");
+
+        // Имената, под които Velopack мести старата папка встрани.
+        keepNotes.Add(DataLocation.SetAside("RiosvImports", "RiosvImports_AbCdEfGh12345678") &&
+                      DataLocation.SetAside("RiosvImports", "RiosvImports.AbCdEfGh12345678") &&
+                      DataLocation.SetAside("RIOSV Imports", "RIOSV Imports_0123456789abcdef")
+            ? "" : "преместената встрани папка не се познава");
+        keepNotes.Add(!DataLocation.SetAside("RiosvImports", "RiosvImports_backup") &&
+                      !DataLocation.SetAside("RiosvImports", "RiosvImportsX_AbCdEfGh12345678") &&
+                      !DataLocation.SetAside("RiosvImports", "RiosvImports_AbCdEfGh1234567!") &&
+                      !DataLocation.SetAside("RiosvImports", "Other_AbCdEfGh12345678")
+            ? "" : "чужда папка се взема за преместената встрани");
+
+        // Повторно инсталиране: старата папка е встрани, новата е без „Data“. Куката взема работата.
+        var aside = Path.Combine(apps, "RiosvImports_AbCdEfGh12345678");
+        Directory.Move(old, aside);
+        Directory.CreateDirectory(Path.Combine(old, "current"));
+        File.WriteAllText(Path.Combine(old, "Update.exe"), "");
+
+        // По-старо копие встрани — не то.
+        var older = Path.Combine(apps, "RiosvImports_ZyXwVuTs98765432");
+        Directory.CreateDirectory(Path.Combine(older, "Data"));
+        File.WriteAllText(Path.Combine(older, "Data", "workspace.db"), "старо");
+        File.SetLastWriteTimeUtc(Path.Combine(older, "Data", "workspace.db"), DateTime.UtcNow.AddDays(-3));
+
+        // Чужда папка до нея — не се пипа.
+        Directory.CreateDirectory(Path.Combine(apps, "RiosvImports_backup", "Data"));
+        File.WriteAllText(Path.Combine(apps, "RiosvImports_backup", "Data", "workspace.db"), "чуждо");
+
+        var source = DataLocation.Recover(old);
+        keepNotes.Add(source is not null &&
+                      string.Equals(source, Path.Combine(aside, "Data"), StringComparison.OrdinalIgnoreCase)
+            ? "" : "куката не взе работата от преместената папка: " + source);
+
+        using (var db = Workspace.Open(Path.Combine(old, "Data", "workspace.db")))
+            keepNotes.Add(db.Companies.List().Any(c => c.Name == "Стара ООД") ? "" : "взетата база е без работата");
+
+        SqliteConnection.ClearAllPools();
+
+        keepNotes.Add(File.Exists(Path.Combine(old, "Data", "Backups", "before-clear-2026-11-15-120000.db")) &&
+                      File.Exists(Path.Combine(old, "Data", "error.log"))
+            ? "" : "резервните копия и дневникът не дойдоха");
+        keepNotes.Add(!File.Exists(Path.Combine(old, "Data", "workspace.db.partial")) ? "" : "куката остави „.partial“");
+
+        // Втори път — тук вече има работа, нищо не се пипа.
+        keepNotes.Add(DataLocation.Recover(old) is null ? "" : "куката презаписа работата");
+
+        // Без преместена встрани папка — нищо, и „Data“ не се прави празна.
+        var lone = Path.Combine(root, "lone", "RiosvImports");
+        Directory.CreateDirectory(lone);
+        keepNotes.Add(DataLocation.Recover(lone) is null && !Directory.Exists(Path.Combine(lone, "Data"))
+            ? "" : "куката направи „Data“ без работа");
+
+        // Профилът може да се подмени — за проверката от край до край.
+        var previous = Environment.GetEnvironmentVariable(Workspace.ProfileVariable);
+        var expected = previous is { Length: > 0 }
+            ? Path.GetFullPath(previous)
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RIOSV Imports");
+
+        Environment.SetEnvironmentVariable(Workspace.ProfileVariable, profile);
+        keepNotes.Add(Workspace.ProfileFolder() == Path.GetFullPath(profile) &&
+                      DataLocation.ProfileFolder == Path.GetFullPath(profile) &&
+                      Workspace.DefaultPath() == Path.Combine(Path.GetFullPath(profile), "workspace.db")
+            ? "" : "профилът не се подменя");
+        Environment.SetEnvironmentVariable(Workspace.ProfileVariable, previous);
+        keepNotes.Add(Workspace.ProfileFolder() == expected ? "" : "без променливата профилът не е истинският");
+    }
+    catch (Exception ex)
+    {
+        keepError = ex.ToString();
+    }
+
+    if (keepError is not null) Console.WriteLine("     " + keepError);
+
+    var keepProblems = keepNotes.Where(n => n.Length > 0).ToList();
+    foreach (var problem in keepProblems) Console.WriteLine("     " + problem);
+
+    Check("пазенето на работата при инсталиране минава без изключение", keepError is null);
+    Check($"направени са всичките {keepNotes.Count} проверки", keepNotes.Count == 23, $"{keepNotes.Count}");
+    Check("работата преживява повторно инсталиране и преместване, а старите копия не се връщат", keepProblems.Count == 0,
+        $"{keepProblems.Count} проблема" + (keepProblems.Count > 0 ? ": " + string.Join(" | ", keepProblems.Take(5)) : ""));
+}
+
 
 
 // =============================================== Лаптопът: нищо не се реже
