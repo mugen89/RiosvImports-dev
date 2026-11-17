@@ -28,6 +28,7 @@ internal sealed class Palette
     {
         "dark" => Lang.T("Тъмна", "Dark"),
         "contrast" => Lang.T("Висок контраст", "High contrast"),
+        "contrast-dark" => Lang.T("Тъмен контраст", "Dark contrast"),
         "warm" => Lang.T("Топла", "Warm"),
         _ => Lang.T("Светла", "Light")
     };
@@ -127,6 +128,28 @@ internal sealed class Palette
     };
 
     /// <summary>
+    /// Тъмен контраст — бял текст върху черно, като „Висок контраст“ на Windows.
+    ///
+    /// За слабо зрение в тъмна стая: светлият висок контраст свети с бялото си,
+    /// а обикновената тъмна е мека нарочно. Основният цвят е циан с черен надпис
+    /// върху него, сигналните цветове са ярки, а рамките — светлосиви, за да
+    /// личат кутиите върху черното. Избраният ред е тъмен циан: бялото върху
+    /// него се чете, а той личи от черния фон.
+    /// </summary>
+    public static readonly Palette ContrastDark = new()
+    {
+        Key = "contrast-dark", IsDark = true,
+        Accent = Rgb(0x1AEBFF), AccentHover = Rgb(0x66F2FF), AccentPressed = Rgb(0x00C4D9),
+        AccentLight = Rgb(0x004C55), AccentSoft = Rgb(0x002A30), OnAccent = Color.Black,
+        Ink = Color.White, InkStrong = Rgb(0xF0F0F0), InkMuted = Rgb(0xD6D6D6), InkFaint = Rgb(0xAFAFAF),
+        Border = Rgb(0xC8C8C8), BorderSoft = Rgb(0x8A8A8A),
+        Surface = Rgb(0x0D0D0D), SurfaceAlt = Rgb(0x161616), Canvas = Color.Black,
+        Ok = Rgb(0x56F08C), OkSoft = Rgb(0x0B3319),
+        Warn = Rgb(0xFFD84D), WarnSoft = Rgb(0x3A3000),
+        Error = Rgb(0xFF7A7A), ErrorSoft = Rgb(0x3D0F12)
+    };
+
+    /// <summary>
     /// Топла — кремав фон вместо бял, за дълга работа с числа.
     ///
     /// Бялото на цял екран свети силно в осветена стая; кремавото сваля
@@ -145,7 +168,7 @@ internal sealed class Palette
         Error = Rgb(0x99302B), ErrorSoft = Rgb(0xF7E2DF)
     };
 
-    public static readonly IReadOnlyList<Palette> All = [Light, Dark, Contrast, Warm];
+    public static readonly IReadOnlyList<Palette> All = [Light, Dark, Contrast, ContrastDark, Warm];
 
     public static Palette ByKey(string? key) =>
         All.FirstOrDefault(p => string.Equals(p.Key, key, StringComparison.OrdinalIgnoreCase)) ?? Light;

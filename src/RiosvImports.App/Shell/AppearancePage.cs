@@ -102,13 +102,13 @@ internal sealed class AppearancePage : ContentPage
         _caption.Height = Theme.Scaled(28);
         _caption.Font = Theme.Small;
         _caption.ForeColor = Theme.InkFaint;
-        _caption.Text = Describe(picker.SelectedIndex);
+        _caption.Text = Describe(Palette.All[picker.SelectedIndex].Key);
 
         picker.SelectedIndexChanged += (_, _) =>
         {
             var chosen = Palette.All[picker.SelectedIndex];
 
-            _caption.Text = Describe(picker.SelectedIndex);
+            _caption.Text = Describe(chosen.Key);
             _workspace.Settings.Set(SettingsStore.Keys.UiTheme, chosen.Key);
 
             // Смяната минава през Theme, а не се прилага тук: главният прозорец
@@ -123,11 +123,13 @@ internal sealed class AppearancePage : ContentPage
         return card;
     }
 
-    private static string Describe(int index) => index switch
+    /// <summary>По ключа на темата, не по мястото ѝ: нова тема в средата не разменя описанията.</summary>
+    private static string Describe(string key) => key switch
     {
-        1 => Lang.T("За вечер и слабо осветена стая.", "For evenings and dim rooms."),
-        2 => Lang.T("Плътни рамки и максимална разлика между цветовете — за слабо зрение.", "Solid borders and maximum contrast — for weak eyesight."),
-        3 => Lang.T("Кремав фон вместо бял, за дълга работа с числа.", "A cream background instead of white, for long spells with numbers."),
+        "dark" => Lang.T("За вечер и слабо осветена стая.", "For evenings and dim rooms."),
+        "contrast" => Lang.T("Плътни рамки и максимална разлика между цветовете — за слабо зрение.", "Solid borders and maximum contrast — for weak eyesight."),
+        "contrast-dark" => Lang.T("Бял текст върху черно и ярки цветове — за слабо зрение и тъмна стая.", "White text on black with bright colours — for weak eyesight and dark rooms."),
+        "warm" => Lang.T("Кремав фон вместо бял, за дълга работа с числа.", "A cream background instead of white, for long spells with numbers."),
         _ => Lang.T("Обичайната — светла, със спокойни цветове.", "The usual one — light, with calm colours.")
     };
 }

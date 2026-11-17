@@ -1453,7 +1453,7 @@ Console.WriteLine("### ТЕСТ - теми");
 {
     var problems = new List<string>();
 
-    Check("има четири теми", Palette.All.Count == 4, $"{Palette.All.Count}");
+    Check("има пет теми", Palette.All.Count == 5, $"{Palette.All.Count}");
 
     foreach (var palette in Palette.All)
     {
@@ -1624,7 +1624,8 @@ Console.WriteLine("### ТЕСТ - всеки прозорец следва те�
     foreach (var l in leftovers.Distinct().Take(8)) Console.WriteLine("     " + l);
 
     Check("прозорците се сглобяват при всяка тема", paintError is null);
-    Check("проверени са 76 прозореца", checkedWindows == 76, $"{checkedWindows}");
+    // 19 прозореца при всяка от петте теми (пета — „Тъмен контраст“, 1.3.3).
+    Check("проверени са 95 прозореца", checkedWindows == 19 * 5, $"{checkedWindows}");
     Check("нито една контрола не остава с цвят по подразбиране",
         leftovers.Count == 0, $"{leftovers.Count} пропуснати");
 }

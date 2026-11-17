@@ -9,7 +9,7 @@
     чете номера от инсталатора; този е за сглобената тук.
   -->
   <PropertyGroup>
-    <Version>1.3.2</Version>
+    <Version>1.3.3</Version>
     <Product>RIOSV Imports</Product>
     <Copyright>© 2026. Всички права запазени.</Copyright>
   </PropertyGroup>
