@@ -473,21 +473,26 @@ internal sealed class SetupForm : Form
         var data = Path.Combine(folder, InstallData.DataFolder);
         var line = Environment.NewLine;
 
+        // „Работата остава“ — само ако я има: иначе е обещание за нищо.
+        var work = InstallData.HasWork(folder)
+            ? $"{line}Работата остава: „{data}“."
+            : $"{line}Работата ѝ ще е в „{data}“.";
+
         switch (plan.Kind)
         {
             case PlanKind.Update when plan.Existing is not null:
-                Tell($"Тук е инсталирана {Named(plan.Existing)}. Ще бъде обновена до {Product.Version}." +
-                     $"{line}Работата остава: „{data}“.", Ok);
+                Tell($"Тук е инсталирана {Named(plan.Existing)}. Ще бъде обновена до {Product.Version}." + work, Ok);
                 break;
 
             case PlanKind.Update:
-                Tell($"Тук вече има RIOSV Imports. Ще бъде сложена наново ({Product.Version})." +
-                     $"{line}Работата остава: „{data}“.", Ok);
+                Tell($"Тук вече има RIOSV Imports. Ще бъде сложена наново ({Product.Version})." + work, Ok);
                 break;
 
             case PlanKind.Move:
+                var carried = InstallData.HasWork(plan.Existing!.Root) ? " заедно с работата си" : string.Empty;
+
                 Tell($"{Named(plan.Existing!)} е инсталирана в:{line}„{plan.Existing!.Root}“." +
-                     $"{line}Ще се премести тук заедно с работата си, а старата папка се маха.", Warn);
+                     $"{line}Ще се премести тук{carried}, а старата папка се маха.", Warn);
                 break;
 
             default:
@@ -523,21 +528,32 @@ internal sealed class SetupForm : Form
     private static string Named(ExistingInstall existing) =>
         existing.Version.Length > 0 ? $"{Product.Title} {existing.Version}" : Product.Title;
 
-    private static void Launch(string folder)
+    /// <summary>
+    /// Пуска програмата накрая. Не стане ли — казва го: мълчаливо човек вижда
+    /// само, че нищо не се отвори. Най-честата причина е антивирусна програма,
+    /// която не пуска непознати нови програми: на 17.11.2026 F-Secure DeepGuard
+    /// спря „RIOSV Imports.exe“ като „рядко ползвано приложение“.
+    /// </summary>
+    private void Launch(string folder)
     {
+        var current = Path.Combine(folder, "current");
+
         try
         {
-            var current = Path.Combine(folder, "current");
-
             Process.Start(new ProcessStartInfo(Path.Combine(current, Product.MainExe))
             {
                 WorkingDirectory = current,
                 UseShellExecute = true
             });
         }
-        catch
+        catch (Exception e)
         {
-            // Връзката на работния плот и в „Старт“ я има — програмата се пуска и оттам.
+            MessageBox.Show(this,
+                $"RIOSV Imports е инсталирана в „{folder}“, но Windows не я пусна:{Environment.NewLine}{e.Message}" +
+                $"{Environment.NewLine}{Environment.NewLine}" +
+                "Най-често я спира антивирусната програма: тя не познава нови програми без подпис. " +
+                $"Помолете администратора да разреши папката „{folder}“.",
+                Product.Title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 

@@ -6,8 +6,10 @@
     Сглобява програмата, прави два пробни пакета (9.9.1 и 9.9.2) и минава с
     нашия инсталатор (src\RiosvImports.Setup) целия път: ново инсталиране,
     обновяване, гол Setup.exe на Velopack отгоре (както го пуска човек),
-    преместване в друга папка, отворена програма, махане. Във всяка стъпка
-    проверява, че работата („Data“) е цяла.
+    преместване в друга папка, отворена програма, махане, запис в „Приложения“
+    без програма (Velopack, спрян по средата), обновяване със спряна кука (както
+    когато антивирусната програма спре новия exe). Във всяка стъпка проверява, че
+    работата („Data“) е цяла.
 
     Не пипа нищо истинско:
       • пакетът е под друго име (RiosvImportsE2E) и без преки пътища — записът
@@ -98,14 +100,26 @@ foreach ($v in '9.9.1', '9.9.2') {
     if ($LASTEXITCODE -ne 0) { throw "Пакетът $v не стана." }
 }
 
+# 9.9.3: „програмата“ е PING — „--veloapp-install“ за него е грешка, както когато
+# антивирусната програма спре новия exe и куката на програмата не тръгне.
+New-Item -ItemType Directory -Force -Path "$Work\hookless" | Out-Null
+Copy-Item "$env:WINDIR\System32\PING.EXE" "$Work\hookless\RIOSV Imports.exe"
+& vpk pack --packId RiosvImportsE2E --packTitle 'RIOSV Imports E2E' --packVersion 9.9.3 --packDir "$Work\hookless" `
+    --mainExe 'RIOSV Imports.exe' --outputDir "$Work\rel-9.9.3" --noPortable --delta None --shortcuts None `
+    --skipVeloAppCheck | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Пакетът 9.9.3 не стана.' }
+
 dotnet build "$root\src\RiosvImports.Setup\RiosvImports.Setup.csproj" -c Release -o "$Work\front" --nologo | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Инсталаторът не се сглоби.' }
 
 $front  = "$Work\front\RiosvImports-win-Setup.exe"
 $setup1 = "$Work\rel-9.9.1\RiosvImportsE2E-win-Setup.exe"
 $setup2 = "$Work\rel-9.9.2\RiosvImportsE2E-win-Setup.exe"
+$setup3 = "$Work\rel-9.9.3\RiosvImportsE2E-win-Setup.exe"
 $a      = "$Work\apps\A"
 $b      = "$Work\apps\B"
+$c      = "$Work\apps\C"
+$d      = "$Work\apps\D"
 $prof   = "$Work\profile"
 $log    = "$Work\front.log"
 
@@ -165,12 +179,36 @@ try {
     Note 'махане: изход 0' ($code -eq 0) "$code"
     Note 'махане: записът е махнат' (-not (Test-Path $key))
     Note 'махане: работата чака в профила' ((Marker "$prof\workspace.db") -eq $mark) (Marker "$prof\workspace.db")
+
+    # 7. Запис без програма. Velopack, спрян по средата, оставя записа и папка само с
+    #    Update.exe и „packages“ (17.11.2026: антивирусната програма не пусна новия exe).
+    #    Това не е инсталация: нищо не се мести, а програмата влиза наново в избраната.
+    #    Update.exe тук е PING — ако все пак го пуснат за махане, само ще върне грешка.
+    New-Item -ItemType Directory -Force -Path "$c\packages" | Out-Null
+    Copy-Item "$env:WINDIR\System32\PING.EXE" "$c\Update.exe"
+    New-Item -Path $key -Force | Out-Null
+    Set-ItemProperty -Path $key -Name InstallLocation -Value $c
+    Set-ItemProperty -Path $key -Name DisplayVersion -Value '9.9.1'
+    $code = Run $front @('--silent', '--installto', "`"$d`"", '--payload', "`"$setup2`"", '--log', "`"$log`"")
+    Note 'запис без програма: изход 0' ($code -eq 0) "$code"
+    Note 'запис без програма: инсталирана в D като нова' ((Remembered) -eq "9.9.2 @ $d") (Remembered)
+    Note 'запис без програма: C не е пипната' ((Test-Path "$c\Update.exe") -and (Test-Path "$c\packages"))
+
+    # 8. Обновяване, при което куката на програмата не тръгва. Velopack пак мести
+    #    старата папка встрани и я трие след новата — с „Data“ вътре, — а куката
+    #    (Recover) не може да помогне. Работата идва от копието в профила.
+    New-Item -ItemType Directory -Force -Path "$d\Data" | Out-Null
+    & python -I $marker write "$d\Data\workspace.db" $mark
+    $code = Run $front @('--silent', '--installto', "`"$d`"", '--payload', "`"$setup3`"", '--log', "`"$log`"")
+    Note 'спряна кука: обновяването минава' ($code -eq 0) "$code"
+    Note 'спряна кука: 9.9.3 в D' ((Remembered) -eq "9.9.3 @ $d") (Remembered)
+    Note 'спряна кука: работата е върната от копието' ((Marker "$d\Data\workspace.db") -eq $mark) (Marker "$d\Data\workspace.db")
 }
 finally {
     $env:RIOSV_PACKID = $null
     $env:RIOSV_PROFILE = $null
 
-    foreach ($folder in @($a, $b)) {
+    foreach ($folder in @($a, $b, $d)) {
         if (Test-Path "$folder\Update.exe") { Run "$folder\Update.exe" @('--uninstall', '--silent') | Out-Null }
     }
 
@@ -184,6 +222,6 @@ $failed = @($notes | Where-Object { $_.StartsWith('FAIL') }).Count
 Write-Host ''
 Write-Host "Проверки: $($notes.Count), неуспешни: $failed (дневник: $log)" -ForegroundColor $(if ($failed) { 'Red' } else { 'Green' })
 
-if ($failed -eq 0) { Remove-Item "$Work\apps", "$Work\publish", "$Work\rel-9.9.1", "$Work\rel-9.9.2" -Recurse -Force -ErrorAction SilentlyContinue }
+if ($failed -eq 0) { Remove-Item "$Work\apps", "$Work\publish", "$Work\rel-9.9.1", "$Work\rel-9.9.2", "$Work\rel-9.9.3", "$Work\hookless" -Recurse -Force -ErrorAction SilentlyContinue }
 
 exit $failed

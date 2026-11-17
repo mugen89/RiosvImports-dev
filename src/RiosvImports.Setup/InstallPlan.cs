@@ -73,6 +73,9 @@ internal sealed class InstallPlan
     /// <summary>Подпапката, в която програмата влиза, когато избраната не е празна.</summary>
     public const string SubFolder = "RIOSV Imports";
 
+    /// <summary>Главният файл на програмата — = AssemblyName на RiosvImports.App.</summary>
+    public const string MainExe = "RIOSV Imports.exe";
+
     /// <summary>
     /// По-дълъг път не се приема: вътре Velopack слага „current\…“ и
     /// „…_&lt;16 знака&gt;“, а Windows по подразбиране спира при 260 знака.
@@ -271,6 +274,20 @@ internal sealed class InstallPlan
             ? FolderState.Leftover
             : FolderState.Occupied;
     }
+
+    /// <summary>
+    /// Има ли в папката истинска инсталация: главният файл в „current“ — или поне
+    /// работата в „Data“, която трябва да се пази.
+    ///
+    /// Velopack, спрян по средата, оставя запис в „Приложения“ и папка само с
+    /// Update.exe и „packages“. Така стана на 17.11.2026, когато антивирусната
+    /// програма не пусна новия exe при инсталиране. Там няма нито програма за
+    /// обновяване, нито работа за пазене — инсталаторът не предлага „Обнови“ в
+    /// такава папка, а пита наново къде.
+    /// </summary>
+    public static bool Holds(string root) =>
+        Look(root) == FolderState.Ours &&
+        (File.Exists(Path.Combine(root, "current", MainExe)) || InstallData.HasWork(root));
 
     /// <summary>Пълен път без наклонена черта накрая — освен за корена на диска.</summary>
     public static string Normalize(string path)

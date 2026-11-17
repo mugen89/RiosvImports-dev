@@ -17746,6 +17746,21 @@ Console.WriteLine("### ТЕСТ - инсталаторът пита къде и 
         planNotes.Add(plan.Kind == PlanKind.Fresh && plan.KeepsWork && !plan.Extended ? "" : $"останала работа: {plan.Kind}");
         planNotes.Add(Plan(leftover, existing).Kind == PlanKind.Invalid ? "" : "преместване върху чужда работа се приема");
 
+        // Записът в „Приложения“ е инсталация само ако програмата или работата са в
+        // папката. Velopack, спрян по средата (17.11.2026: антивирусната програма не
+        // пусна новия exe), оставя Update.exe и „packages“ — там няма какво да се
+        // обновява и инсталаторът пита наново къде.
+        planNotes.Add(InstallPlan.Holds(installed) ? "" : "истинската инсталация не се признава");
+        var halfway = Path.Combine(root, "halfway");
+        Directory.CreateDirectory(Path.Combine(halfway, "packages"));
+        File.WriteAllText(Path.Combine(halfway, "Update.exe"), "");
+        planNotes.Add(!InstallPlan.Holds(halfway) ? "" : "спряната по средата инсталация се брои за програма");
+        Directory.CreateDirectory(Path.Combine(halfway, "Data"));
+        File.WriteAllText(Path.Combine(halfway, "Data", "workspace.db"), "");
+        planNotes.Add(InstallPlan.Holds(halfway) ? "" : "работата в спряната по средата инсталация не се пази");
+        planNotes.Add(!InstallPlan.Holds(portable) ? "" : "преносимото копие се брои за инсталация");
+        planNotes.Add(!InstallPlan.Holds(Path.Combine(root, "nowhere")) ? "" : "липсваща папка се брои за инсталация");
+
         // Променливи като %TEMP% се разгръщат.
         Environment.SetEnvironmentVariable("RIOSV_PLAN_TEST", root);
         plan = Plan(@"%RIOSV_PLAN_TEST%\env");
@@ -17767,7 +17782,7 @@ Console.WriteLine("### ТЕСТ - инсталаторът пита къде и 
     foreach (var problem in planProblems) Console.WriteLine("     " + problem);
 
     Check("решението къде да се инсталира минава без изключение", planError is null);
-    Check($"направени са всичките {planNotes.Count} проверки", planNotes.Count == 27, $"{planNotes.Count}");
+    Check($"направени са всичките {planNotes.Count} проверки", planNotes.Count == 32, $"{planNotes.Count}");
     Check("програмата влиза само в своя папка, а инсталираната се обновява или мести", planProblems.Count == 0,
         $"{planProblems.Count} проблема" + (planProblems.Count > 0 ? ": " + string.Join(" | ", planProblems.Take(5)) : ""));
 }

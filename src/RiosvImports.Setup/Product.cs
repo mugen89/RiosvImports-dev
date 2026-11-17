@@ -19,7 +19,7 @@ internal static class Product
     public const string Title = "RIOSV Imports";
 
     /// <summary>= AssemblyName на програмата.</summary>
-    public const string MainExe = "RIOSV Imports.exe";
+    public const string MainExe = InstallPlan.MainExe;
 
     /// <summary>= Workspace.ProfileVariable в програмата: друга папка вместо профила, за проверки.</summary>
     public const string ProfileVariable = "RIOSV_PROFILE";
@@ -59,8 +59,9 @@ internal static class Registration
     private const string Uninstall = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\";
 
     /// <summary>
-    /// Инсталираната програма — или null. Запис, чиито файлове ги няма (папката е
-    /// изтрита на ръка), не се брои: там програма няма.
+    /// Инсталираната програма — или null. Запис без програма не се брои: папката
+    /// е изтрита на ръка или Velopack е спрял по средата и в нея са останали само
+    /// Update.exe и „packages“ (виж <see cref="InstallPlan.Holds"/>).
     /// </summary>
     public static ExistingInstall? Find()
     {
@@ -72,7 +73,7 @@ internal static class Registration
 
             var root = Clean(key.GetValue("InstallLocation"));
 
-            if (root.Length == 0 || InstallPlan.Look(root) != FolderState.Ours) return null;
+            if (root.Length == 0 || !InstallPlan.Holds(root)) return null;
 
             return new ExistingInstall(InstallPlan.Normalize(root), Clean(key.GetValue("DisplayVersion")));
         }
